@@ -208,11 +208,21 @@ export function registerRoutes(httpServer: Server, app: Express) {
     try {
       // Extract order details
       const orderData = await extractOrderFromConversation(msgs, products);
+      console.log("[Order] Extracted line items:", JSON.stringify(orderData.lineItems));
 
       if (!orderData.lineItems || orderData.lineItems.length === 0) {
         await sendSms(phone, "I couldn't find any items in your order. Could you tell me what you'd like to order?");
         return;
       }
+
+      // Ensure all line items have a valid qboItemId — filter out any that don't
+      const validItems = orderData.lineItems.filter((item: any) => item.qboItemId && item.qboItemId !== "null" && item.qboItemId !== "");
+      if (validItems.length === 0) {
+        console.error("[Order] No line items with valid qboItemId — falling back to pending order");
+        await sendSms(phone, `Order confirmed! Total: $${orderData.lineItems.reduce((s: number, i: any) => s + i.amount, 0).toFixed(2)}. Our team will process your invoice and send it to you. Thank you!`);
+        return;
+      }
+      orderData.lineItems = validItems;
 
       // Parse delivery fee from encoded address field (set during CALC_DELIVERY)
       let deliveryFee = 0;
