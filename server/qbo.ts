@@ -268,10 +268,17 @@ export async function createInvoice(params: {
   let paymentLink: string | null = null;
   try {
     const linkData = await qboGet(`/invoice/${invoice.Id}/onlineinvoice`);
+    console.log("[QBO] onlineinvoice response:", JSON.stringify(linkData));
     paymentLink = linkData?.InvoiceLink || null;
-  } catch (_) {
-    // QBO Payments may not be enabled — payment link won't be available
-    console.warn("[QBO] Could not get payment link — is QuickBooks Payments enabled?");
+  } catch (err) {
+    console.warn("[QBO] Could not get payment link:", err);
+  }
+
+  // Fallback: build a direct QBO invoice view link
+  if (!paymentLink) {
+    const { realmId } = cfg();
+    paymentLink = `https://app.qbo.intuit.com/app/invoice?txnId=${invoice.Id}`;
+    console.log("[QBO] Using fallback invoice link:", paymentLink);
   }
 
   return {
