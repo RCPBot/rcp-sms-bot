@@ -623,7 +623,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
       if (!clientId) return res.status(400).send("QBO_CLIENT_ID not set");
       const params = new URLSearchParams({
         client_id: clientId,
-        redirect_uri: `${process.env.APP_URL || "http://localhost:5000"}/api/qbo/callback`,
+        redirect_uri: `${process.env.APP_URL || "http://localhost:5000"}/qbo-callback.html`,
         response_type: "code",
         scope: "com.intuit.quickbooks.accounting",
         state: Math.random().toString(36).slice(2),
@@ -757,6 +757,48 @@ export function registerRoutes(httpServer: Server, app: Express) {
       } catch (err) {
         console.error("[Voice] Failed to send transcription:", err);
       }
+    }
+  });
+
+  // ── QBO token exchange (called from static qbo-callback.html page) ──────────
+  app.post("/api/qbo/exchange", async (req, res) => {
+    try {
+      const { code, realmId } = req.body as { code: string; realmId: string };
+      if (!code || !realmId) return res.status(400).json({ ok: false, error: "Missing code or realmId" });
+
+      const clientId = process.env.QBO_CLIENT_ID!;
+      const clientSecret = process.env.QBO_CLIENT_SECRET!;
+      const redirectUri = `${process.env.APP_URL || "http://localhost:5000"}/qbo-callback.html`;
+
+      const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+      const tokenRes = await fetch("https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer", {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${credentials}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+          Accept: "application/json",
+        },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          code,
+          redirect_uri: redirectUri,
+        }),
+      });
+
+      const tokens = await tokenRes.json();
+
+      console.log("[QBO EXCHANGE SUCCESS]");
+      console.log(`QBO_REALM_ID=${realmId}`);
+      console.log(`QBO_REFRESH_TOKEN=${tokens.refresh_token}`);
+
+      // Set immediately in process env so app works without restart
+      process.env.QBO_REALM_ID = realmId;
+      if (tokens.refresh_token) process.env.QBO_REFRESH_TOKEN = tokens.refresh_token;
+
+      return res.json({ ok: true, realmId, refreshToken: tokens.refresh_token });
+    } catch (err: any) {
+      console.error("[QBO EXCHANGE ERROR]", err);
+      return res.status(500).json({ ok: false, error: err.message });
     }
   });
 
