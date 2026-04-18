@@ -1,0 +1,6 @@
+node_modules/
+# dist/ is committed so Railway can run without building
+data.db
+.env
+.env.local
+*.log

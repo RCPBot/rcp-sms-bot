@@ -1,0 +1,61 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Rebar Concrete Products — dark industrial palette */
+    /* Background — deep charcoal matching company brand */
+    --background: 220 15% 10%;
+    --foreground: 40 20% 92%;
+
+    --card: 220 14% 14%;
+    --card-foreground: 40 20% 92%;
+
+    --popover: 220 14% 14%;
+    --popover-foreground: 40 20% 92%;
+
+    /* Primary — neon lime-yellow from RCP logo */
+    --primary: 74 95% 53%;
+    --primary-foreground: 220 15% 8%;
+
+    --secondary: 220 12% 20%;
+    --secondary-foreground: 40 15% 80%;
+
+    --muted: 220 12% 18%;
+    --muted-foreground: 220 10% 55%;
+
+    --accent: 74 95% 53%;
+    --accent-foreground: 220 15% 8%;
+
+    --destructive: 0 70% 55%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 12% 22%;
+    --input: 220 12% 22%;
+    --ring: 74 95% 53%;
+
+    --radius: 0.5rem;
+
+    /* Status colors */
+    --status-active: 74 95% 53%;
+    --status-invoiced: 210 80% 60%;
+    --status-paid: 142 72% 45%;
+    --status-pending: 38 92% 55%;
+    --status-cancelled: 0 65% 50%;
+  }
+}
+
+@layer base {
+  * { @apply border-border; }
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', 'DM Sans', system-ui, sans-serif;
+  }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { @apply bg-muted; }
+::-webkit-scrollbar-thumb { @apply bg-border rounded-full; }
+::-webkit-scrollbar-thumb:hover { @apply bg-muted-foreground; }

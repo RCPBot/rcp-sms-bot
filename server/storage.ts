@@ -1,0 +1,232 @@
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import Database from "better-sqlite3";
+import { eq, desc, and } from "drizzle-orm";
+import {
+  conversations, messages, orders, products, estimates,
+  type Conversation, type InsertConversation,
+  type Message, type InsertMessage,
+  type Order, type InsertOrder,
+  type Product, type InsertProduct,
+  type Estimate, type InsertEstimate,
+  type ConversationWithMessages,
+} from "@shared/schema";
+
+const sqlite = new Database("data.db");
+export const db = drizzle(sqlite);
+
+// ── Migrations (create tables) ────────────────────────────────────────────────
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS conversations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    phone TEXT NOT NULL,
+    customer_name TEXT,
+    customer_email TEXT,
+    customer_company TEXT,
+    delivery_address TEXT,
+    qbo_customer_id TEXT,
+    verified INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'active',
+    stage TEXT NOT NULL DEFAULT 'greeting',
+    created_at INTEGER,
+    updated_at INTEGER
+  );
+  CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id INTEGER NOT NULL REFERENCES conversations(id),
+    direction TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at INTEGER
+  );
+  CREATE TABLE IF NOT EXISTS orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id INTEGER NOT NULL REFERENCES conversations(id),
+    qbo_invoice_id TEXT,
+    qbo_invoice_number TEXT,
+    payment_link TEXT,
+    line_items_json TEXT NOT NULL,
+    subtotal REAL NOT NULL DEFAULT 0,
+    delivery_fee REAL NOT NULL DEFAULT 0,
+    delivery_miles REAL,
+    total REAL NOT NULL DEFAULT 0,
+    delivery_type TEXT NOT NULL DEFAULT 'pickup',
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at INTEGER
+  );
+  CREATE TABLE IF NOT EXISTS products (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    qbo_item_id TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    description TEXT,
+    unit_price REAL,
+    unit_of_measure TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    synced_at INTEGER
+  );
+  CREATE TABLE IF NOT EXISTS estimates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id INTEGER NOT NULL REFERENCES conversations(id),
+    qbo_estimate_id TEXT,
+    qbo_estimate_number TEXT,
+    qbo_estimate_link TEXT,
+    line_items_json TEXT NOT NULL,
+    fabrication_json TEXT,
+    plan_pages_json TEXT,
+    takeoff_notes_json TEXT,
+    subtotal REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending',
+    cut_sheet_emailed_at INTEGER,
+    created_at INTEGER
+  );
+`);
+
+export interface IStorage {
+  // Conversations
+  getOrCreateConversation(phone: string): Conversation;
+  getConversation(id: number): Conversation | undefined;
+  getConversationByPhone(phone: string): Conversation | undefined;
+  updateConversation(id: number, data: Partial<InsertConversation>): Conversation;
+  getAllConversations(): ConversationWithMessages[];
+
+  // Messages
+  addMessage(data: InsertMessage): Message;
+  getMessages(conversationId: number): Message[];
+
+  // Orders
+  createOrder(data: InsertOrder): Order;
+  updateOrder(id: number, data: Partial<InsertOrder>): Order;
+  getOrderByConversation(conversationId: number): Order | undefined;
+  getAllOrders(): Order[];
+
+  // Products
+  upsertProduct(data: InsertProduct): Product;
+  getAllProducts(): Product[];
+  getProductByQboId(qboItemId: string): Product | undefined;
+
+  // Estimates
+  createEstimate(data: InsertEstimate): Estimate;
+  updateEstimate(id: number, data: Partial<InsertEstimate>): Estimate;
+  getEstimate(id: number): Estimate | undefined;
+  getEstimateByConversation(conversationId: number): Estimate | undefined;
+  getAllEstimates(): Estimate[];
+}
+
+export class Storage implements IStorage {
+  // ── Conversations ───────────────────────────────────────────────────────────
+  getOrCreateConversation(phone: string): Conversation {
+    const existing = db.select().from(conversations)
+      .where(and(eq(conversations.phone, phone), eq(conversations.status, "active")))
+      .orderBy(desc(conversations.createdAt))
+      .get();
+    if (existing) return existing;
+    return db.insert(conversations).values({
+      phone,
+      status: "active",
+      stage: "greeting",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }).returning().get();
+  }
+
+  getConversation(id: number): Conversation | undefined {
+    return db.select().from(conversations).where(eq(conversations.id, id)).get();
+  }
+
+  getConversationByPhone(phone: string): Conversation | undefined {
+    return db.select().from(conversations)
+      .where(and(eq(conversations.phone, phone), eq(conversations.status, "active")))
+      .orderBy(desc(conversations.createdAt))
+      .get();
+  }
+
+  updateConversation(id: number, data: Partial<InsertConversation>): Conversation {
+    return db.update(conversations)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(conversations.id, id))
+      .returning().get();
+  }
+
+  getAllConversations(): ConversationWithMessages[] {
+    const convs = db.select().from(conversations).orderBy(desc(conversations.updatedAt)).all();
+    return convs.map(conv => ({
+      ...conv,
+      messages: db.select().from(messages).where(eq(messages.conversationId, conv.id)).all(),
+      orders: db.select().from(orders).where(eq(orders.conversationId, conv.id)).all(),
+    }));
+  }
+
+  // ── Messages ────────────────────────────────────────────────────────────────
+  addMessage(data: InsertMessage): Message {
+    return db.insert(messages).values({ ...data, createdAt: new Date() }).returning().get();
+  }
+
+  getMessages(conversationId: number): Message[] {
+    return db.select().from(messages)
+      .where(eq(messages.conversationId, conversationId))
+      .orderBy(messages.createdAt)
+      .all();
+  }
+
+  // ── Orders ──────────────────────────────────────────────────────────────────
+  createOrder(data: InsertOrder): Order {
+    return db.insert(orders).values({ ...data, createdAt: new Date() }).returning().get();
+  }
+
+  updateOrder(id: number, data: Partial<InsertOrder>): Order {
+    return db.update(orders).set(data).where(eq(orders.id, id)).returning().get();
+  }
+
+  getOrderByConversation(conversationId: number): Order | undefined {
+    return db.select().from(orders)
+      .where(eq(orders.conversationId, conversationId))
+      .orderBy(desc(orders.createdAt))
+      .get();
+  }
+
+  getAllOrders(): Order[] {
+    return db.select().from(orders).orderBy(desc(orders.createdAt)).all();
+  }
+
+  // ── Products ────────────────────────────────────────────────────────────────
+  upsertProduct(data: InsertProduct): Product {
+    const existing = db.select().from(products).where(eq(products.qboItemId, data.qboItemId)).get();
+    if (existing) {
+      return db.update(products).set({ ...data, syncedAt: new Date() })
+        .where(eq(products.qboItemId, data.qboItemId)).returning().get();
+    }
+    return db.insert(products).values({ ...data, syncedAt: new Date() }).returning().get();
+  }
+
+  getAllProducts(): Product[] {
+    return db.select().from(products).where(eq(products.active, true)).all();
+  }
+
+  getProductByQboId(qboItemId: string): Product | undefined {
+    return db.select().from(products).where(eq(products.qboItemId, qboItemId)).get();
+  }
+
+  // ── Estimates ────────────────────────────────────────────────────────────────
+  createEstimate(data: InsertEstimate): Estimate {
+    return db.insert(estimates).values({ ...data, createdAt: new Date() }).returning().get();
+  }
+
+  updateEstimate(id: number, data: Partial<InsertEstimate>): Estimate {
+    return db.update(estimates).set(data).where(eq(estimates.id, id)).returning().get();
+  }
+
+  getEstimate(id: number): Estimate | undefined {
+    return db.select().from(estimates).where(eq(estimates.id, id)).get();
+  }
+
+  getEstimateByConversation(conversationId: number): Estimate | undefined {
+    return db.select().from(estimates)
+      .where(eq(estimates.conversationId, conversationId))
+      .orderBy(desc(estimates.createdAt))
+      .get();
+  }
+
+  getAllEstimates(): Estimate[] {
+    return db.select().from(estimates).orderBy(desc(estimates.createdAt)).all();
+  }
+}
+
+export const storage = new Storage();
