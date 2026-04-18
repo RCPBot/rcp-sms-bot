@@ -6,6 +6,7 @@ import { sendSms, isTwilioConfigured, sendPaymentLinkEmail } from "./sms";
 import { processMessage, extractOrderFromConversation, extractCustomerInfo, isAiConfigured } from "./ai";
 import { syncProducts, findOrCreateCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured } from "./qbo";
 import { performTakeoff } from "./takeoff";
+import { resolveLinksFromText } from "./link-resolver";
 import { generateCutSheetPdf, emailCutSheet } from "./cutsheet";
 import type { LineItem } from "@shared/schema";
 
@@ -43,6 +44,22 @@ export function registerRoutes(httpServer: Server, app: Express) {
       const url = req.body[`MediaUrl${i}`];
       const type = (req.body[`MediaContentType${i}`] || "").toLowerCase();
       if (url && type.startsWith("image/")) mediaUrls.push(url);
+    }
+
+    // Resolve any links in the message body (Google Drive, Dropbox, direct PDFs, etc.)
+    if (cleanBody) {
+      try {
+        const resolved = await resolveLinksFromText(cleanBody);
+        if (resolved.imageUrls.length > 0) {
+          console.log(`[LinkResolver] Resolved ${resolved.resolvedCount} link(s) → ${resolved.imageUrls.length} image(s) from message`);
+          mediaUrls.push(...resolved.imageUrls);
+        }
+        if (resolved.failedCount > 0) {
+          console.warn(`[LinkResolver] ${resolved.failedCount} link(s) could not be resolved`);
+        }
+      } catch (err: any) {
+        console.warn(`[LinkResolver] Error resolving links: ${err?.message}`);
+      }
     }
 
     // Require at least a body or an image
