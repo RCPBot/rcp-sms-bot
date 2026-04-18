@@ -230,14 +230,19 @@ export async function createInvoice(params: {
     },
   }));
 
-  // Add delivery fee as a description-only line item
+  // Add delivery fee using the QBO "Delivery Fee" product (ID 1010000081)
   if (params.deliveryFee && params.deliveryFee > 0) {
     const milesNote = params.deliveryMiles ? ` (${params.deliveryMiles} mi @ $3/mi)` : "";
     lines.push({
       LineNum: lines.length + 1,
       Amount: params.deliveryFee,
       Description: `Delivery Fee${milesNote}`,
-      DetailType: "DescriptionOnly",
+      DetailType: "SalesItemLineDetail",
+      SalesItemLineDetail: {
+        ItemRef: { value: "1010000081", name: "Delivery Fee" },
+        Qty: 1,
+        UnitPrice: params.deliveryFee,
+      },
     });
   }
 
