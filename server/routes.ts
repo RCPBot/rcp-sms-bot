@@ -761,36 +761,55 @@ export function registerRoutes(httpServer: Server, app: Express) {
   });
 
     app.get("/api/qbo/callback", async (req, res) => {
-    const { code, realmId } = req.query as Record<string, string>;
-    if (!code || !realmId) return res.status(400).send("Missing code or realmId");
+    try {
+      const { code, realmId } = req.query as Record<string, string>;
+      if (!code || !realmId) return res.status(400).send("Missing code or realmId");
 
-    const clientId = process.env.QBO_CLIENT_ID!;
-    const clientSecret = process.env.QBO_CLIENT_SECRET!;
-    const redirectUri = `${process.env.APP_URL || "http://localhost:5000"}/api/qbo/callback`;
+      const clientId = process.env.QBO_CLIENT_ID!;
+      const clientSecret = process.env.QBO_CLIENT_SECRET!;
+      const redirectUri = `${process.env.APP_URL || "http://localhost:5000"}/api/qbo/callback`;
 
-    const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
-    const tokenRes = await fetch("https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer", {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${credentials}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: new URLSearchParams({
-        grant_type: "authorization_code",
-        code,
-        redirect_uri: redirectUri,
-      }),
-    });
+      const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+      const tokenRes = await fetch("https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer", {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${credentials}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+          Accept: "application/json",
+        },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          code,
+          redirect_uri: redirectUri,
+        }),
+      });
 
-    const tokens = await tokenRes.json();
-    res.send(`
-      <h2>QuickBooks Connected!</h2>
-      <p>Add these to your .env file:</p>
-      <pre>
-QBO_REALM_ID=${realmId}
-QBO_REFRESH_TOKEN=${tokens.refresh_token}
-      </pre>
-      <p>Then restart the server.</p>
-    `);
+      const tokens = await tokenRes.json();
+
+      // Always log to Railway console so we can retrieve values even if page fails
+      console.log("[QBO CALLBACK SUCCESS]");
+      console.log(`QBO_REALM_ID=${realmId}`);
+      console.log(`QBO_REFRESH_TOKEN=${tokens.refresh_token}`);
+
+      // Set in process.env immediately so app works without restart
+      process.env.QBO_REALM_ID = realmId;
+      if (tokens.refresh_token) process.env.QBO_REFRESH_TOKEN = tokens.refresh_token;
+
+      res.send(`<!DOCTYPE html><html><head><title>QuickBooks Connected</title>
+        <style>body{font-family:sans-serif;max-width:600px;margin:60px auto;padding:20px;}
+        pre{background:#f4f4f4;padding:16px;border-radius:8px;word-break:break-all;white-space:pre-wrap;}
+        .success{color:#2e7d32;font-size:24px;font-weight:bold;}
+        </style></head><body>
+        <p class="success">✅ QuickBooks Connected!</p>
+        <p>RCP TextBot is now connected to <strong>Rebar Concrete Products</strong>.</p>
+        <p>Copy these two values into your Railway environment variables:</p>
+        <pre>QBO_REALM_ID=${realmId}
+QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
+        <p>Then redeploy Railway and the bot will be fully live.</p>
+        </body></html>`);
+    } catch (err: any) {
+      console.error("[QBO CALLBACK ERROR]", err);
+      res.status(500).send(`<h2>Callback Error</h2><pre>${err.message}</pre><p>Check Railway logs for QBO_REALM_ID and QBO_REFRESH_TOKEN values.</p>`);
+    }
   });
 }
