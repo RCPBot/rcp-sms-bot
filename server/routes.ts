@@ -215,8 +215,13 @@ export function registerRoutes(httpServer: Server, app: Express) {
         return;
       }
 
-      // Ensure all line items have a valid qboItemId — filter out any that don't
-      const validItems = orderData.lineItems.filter((item: any) => item.qboItemId && item.qboItemId !== "null" && item.qboItemId !== "");
+      // Strip any line items with non-numeric qboItemId (e.g. "CUSTOM", "DELIVERY")
+      // Delivery fees are handled separately via the deliveryFee parameter
+      const validItems = orderData.lineItems.filter((item: any) => {
+        const id = String(item.qboItemId || "");
+        return id && id !== "null" && id !== "" && /^\d+$/.test(id);
+      });
+      console.log("[Order] Valid line items after filter:", JSON.stringify(validItems));
       if (validItems.length === 0) {
         console.error("[Order] No line items with valid qboItemId — falling back to pending order");
         await sendSms(phone, `Order confirmed! Total: $${orderData.lineItems.reduce((s: number, i: any) => s + i.amount, 0).toFixed(2)}. Our team will process your invoice and send it to you. Thank you!`);
