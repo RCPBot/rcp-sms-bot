@@ -618,13 +618,22 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
   // ── QBO OAuth Flow (one-time setup) ─────────────────────────────────────────
   app.get("/api/qbo/connect", (_req, res) => {
-    const clientId = process.env.QBO_CLIENT_ID;
-    if (!clientId) return res.status(400).json({ error: "QBO_CLIENT_ID not set" });
-    const redirectUri = encodeURIComponent(`${process.env.APP_URL || "http://localhost:5000"}/api/qbo/callback`);
-    const scopes = encodeURIComponent("com.intuit.quickbooks.accounting");
-    const state = Math.random().toString(36).slice(2);
-    const authUrl = `https://appcenter.intuit.com/connect/oauth2?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scopes}&state=${state}`;
-    res.redirect(authUrl);
+    try {
+      const clientId = process.env.QBO_CLIENT_ID;
+      if (!clientId) return res.status(400).send("QBO_CLIENT_ID not set");
+      const params = new URLSearchParams({
+        client_id: clientId,
+        redirect_uri: `${process.env.APP_URL || "http://localhost:5000"}/api/qbo/callback`,
+        response_type: "code",
+        scope: "com.intuit.quickbooks.accounting",
+        state: Math.random().toString(36).slice(2),
+      });
+      const authUrl = `https://appcenter.intuit.com/connect/oauth2?${params.toString()}`;
+      res.redirect(authUrl);
+    } catch (err) {
+      console.error("[QBO connect error]", err);
+      res.status(500).send("Failed to build QBO auth URL");
+    }
   });
 
   // ── Inbound Voice Call (IVR Auto-Attendant) ────────────────────────────────
