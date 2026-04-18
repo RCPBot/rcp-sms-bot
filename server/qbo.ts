@@ -6,7 +6,7 @@ import { storage } from "./storage";
 import type { LineItem } from "@shared/schema";
 
 const QB_BASE = "https://quickbooks.api.intuit.com/v3/company";
-const DISCOVERY_URL = "https://developer.api.intuit.com/.well-known/openid_sandbox_configuration";
+const DISCOVERY_URL = "https://developer.api.intuit.com/.well-known/openid_configuration";
 
 let _accessToken: string | null = null;
 let _tokenExpiry: number = 0;
