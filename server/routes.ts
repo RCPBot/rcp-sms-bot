@@ -2,7 +2,7 @@ import type { Express } from "express";
 import type { Server } from "http";
 import express from "express";
 import { storage } from "./storage";
-import { sendSms, isTwilioConfigured } from "./sms";
+import { sendSms, isTwilioConfigured, sendPaymentLinkEmail } from "./sms";
 import { processMessage, extractOrderFromConversation, extractCustomerInfo, isAiConfigured } from "./ai";
 import { syncProducts, findOrCreateCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured } from "./qbo";
 import { performTakeoff } from "./takeoff";
@@ -320,21 +320,33 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
       const freeDeliveryNote = qualifiesFreeDelivery ? " Free delivery applied!" : "";
 
-      if (paymentLink) {
-        await sendSms(
-          phone,
-          `Invoice #${invoiceNumber} created!${freeDeliveryNote} Total: $${total.toFixed(2)}\n\nPay here: ${paymentLink}\n\nWe'll also email the invoice to ${conv.customerEmail}.`
-        );
-      } else if (invoiceId) {
-        await sendSms(
-          phone,
-          `Invoice #${invoiceNumber} created for $${total.toFixed(2)}.${freeDeliveryNote} We emailed it to ${conv.customerEmail} with the payment link. Thank you!`
-        );
-      } else {
-        await sendSms(
-          phone,
-          `Order confirmed.${freeDeliveryNote} Total: $${total.toFixed(2)}. Our team will follow up shortly with your invoice. Thank you!`
-        );
+      const smsBody = paymentLink
+        ? `Invoice #${invoiceNumber} created!${freeDeliveryNote} Total: $${total.toFixed(2)}\n\nPay here: ${paymentLink}\n\nWe'll also email the invoice to ${conv.customerEmail}.`
+        : invoiceId
+        ? `Invoice #${invoiceNumber} created for $${total.toFixed(2)}.${freeDeliveryNote} We emailed it to ${conv.customerEmail} with the payment link. Thank you!`
+        : `Order confirmed.${freeDeliveryNote} Total: $${total.toFixed(2)}. Our team will follow up shortly with your invoice. Thank you!`;
+
+      let smsSent = false;
+      try {
+        await sendSms(phone, smsBody);
+        smsSent = true;
+      } catch (smsErr: any) {
+        console.error(`[SMS] Failed to send confirmation to ${phone} — falling back to email. Error: ${smsErr?.message}`);
+      }
+
+      // Email fallback: if SMS failed and we have a payment link + customer email, send it via email
+      if (!smsSent && paymentLink && conv.customerEmail && invoiceId) {
+        try {
+          await sendPaymentLinkEmail({
+            to: conv.customerEmail,
+            customerName: conv.customerName || "Valued Customer",
+            invoiceNumber,
+            total,
+            paymentLink,
+          });
+        } catch (emailErr: any) {
+          console.error(`[Email] Payment link fallback also failed: ${emailErr?.message}`);
+        }
       }
 
       storage.updateConversation(conversationId, { status: "completed", stage: "invoiced" });
