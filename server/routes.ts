@@ -629,7 +629,8 @@ export function registerRoutes(httpServer: Server, app: Express) {
         state: Math.random().toString(36).slice(2),
       });
       const authUrl = `https://appcenter.intuit.com/connect/oauth2?${params.toString()}`;
-      res.redirect(authUrl);
+      // Use HTML meta-refresh redirect instead of 302 to avoid Railway proxy issues
+      res.send(`<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0;url=${authUrl}"><title>Connecting to QuickBooks...</title></head><body><p>Redirecting to QuickBooks... <a href="${authUrl}">Click here if not redirected</a></p></body></html>`);
     } catch (err) {
       console.error("[QBO connect error]", err);
       res.status(500).send("Failed to build QBO auth URL");
