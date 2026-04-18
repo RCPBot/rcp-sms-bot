@@ -624,7 +624,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
     const scopes = encodeURIComponent("com.intuit.quickbooks.accounting");
     const state = Math.random().toString(36).slice(2);
     const authUrl = `https://appcenter.intuit.com/connect/oauth2?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scopes}&state=${state}`;
-    res.json({ authUrl });
+    res.redirect(authUrl);
   });
 
   // ── Inbound Voice Call (IVR Auto-Attendant) ────────────────────────────────
