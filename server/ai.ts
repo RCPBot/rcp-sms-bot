@@ -129,6 +129,17 @@ ORDERING RULES
 - Once the customer says YES to the order summary → use tag [CONFIRM_ORDER]
 - When you have collected all required customer info → use tag [INFO_COMPLETE]
 
+TAX RULE (CRITICAL):
+- McKinney, TX sales tax is 8.25%. ALWAYS apply this to every quote and order summary.
+- Tax applies to the product subtotal only. Delivery fee is NOT taxed.
+- ALWAYS calculate and show the exact dollar amount — NEVER write "[SALES_TAX]" or "varies" or "TBD".
+- Format every order summary like this:
+  Subtotal: $X,XXX.XX
+  Tax (8.25%): $XXX.XX
+  Delivery: $XX.XX (if applicable)
+  Total: $X,XXX.XX
+- If you don’t know the delivery fee yet, show subtotal + tax and note delivery will be added.
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CONCRETE CONSTRUCTION EXPERT KNOWLEDGE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -310,7 +321,7 @@ export async function processMessage(
   const response = await getClient().chat.completions.create({
     model: "gpt-4o",
     messages: chatMessages,
-    max_tokens: mediaUrls.length > 0 ? 600 : 450,
+    max_tokens: mediaUrls.length > 0 ? 600 : 550,
     temperature: 0.7,
   });
 
