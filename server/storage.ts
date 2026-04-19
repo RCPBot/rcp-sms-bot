@@ -113,11 +113,27 @@ export interface IStorage {
 export class Storage implements IStorage {
   // ── Conversations ───────────────────────────────────────────────────────────
   getOrCreateConversation(phone: string): Conversation {
-    const existing = db.select().from(conversations)
+    // First look for an active conversation
+    const active = db.select().from(conversations)
       .where(and(eq(conversations.phone, phone), eq(conversations.status, "active")))
       .orderBy(desc(conversations.createdAt))
       .get();
-    if (existing) return existing;
+    if (active) return active;
+
+    // If a completed conversation exists, reactivate it so the customer
+    // keeps their verified status and history rather than starting over
+    const completed = db.select().from(conversations)
+      .where(and(eq(conversations.phone, phone), eq(conversations.status, "completed")))
+      .orderBy(desc(conversations.updatedAt))
+      .get();
+    if (completed) {
+      return db.update(conversations)
+        .set({ status: "active", stage: "ordering", updatedAt: new Date() })
+        .where(eq(conversations.id, completed.id))
+        .returning().get();
+    }
+
+    // No history at all — brand new customer
     return db.insert(conversations).values({
       phone,
       status: "active",

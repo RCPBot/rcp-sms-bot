@@ -111,6 +111,16 @@ export function registerRoutes(httpServer: Server, app: Express) {
         body: bodyWithMedia,
       });
 
+      // ── Shortcut: END / DONE — customer explicitly closes the conversation ───
+      const CLOSE_KEYWORDS = /^(done|bye|goodbye|end|close|that'?s? all|no more|nothing else|we'?re? good|all good|thank you that'?s? all|thanks that'?s? all|that will (be )?all)[\.!]?$/i;
+      if (CLOSE_KEYWORDS.test(cleanBody.trim())) {
+        storage.updateConversation(conv.id, { status: "completed" });
+        const closeMsg = `You're all set! Text us anytime if you need anything else. — Rebar Concrete Products (469) 631-7730`;
+        storage.addMessage({ conversationId: conv.id, direction: "outbound", body: closeMsg });
+        try { await sendSms(cleanPhone, closeMsg); } catch {}
+        return;
+      }
+
       // ── Shortcut: APPROVE keyword from customer ────────────────────────────
       if (conv.stage === "estimating" && cleanBody.trim().toUpperCase() === "APPROVE") {
         const est = storage.getEstimateByConversation(conv.id);

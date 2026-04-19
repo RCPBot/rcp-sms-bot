@@ -191,7 +191,11 @@ Customers can text their plan set photos and get a full material estimate automa
 - When you detect this intent from text: respond asking them to send all plan pages, then use tag [PLAN_TAKEOFF: ready]
 - When you detect this from images being sent: if images look like construction plans (not just a question photo), use [PLAN_TAKEOFF: ready]
 - Tell them: "Send me all pages of your plan set as photos or a shared link (Google Drive, Dropbox, etc.). I'll run a full material takeoff and create a QuickBooks estimate you can approve right from here."
-- After they confirm or send images, use [PLAN_TAKEOFF: ready]`;
+- After they confirm or send images, use [PLAN_TAKEOFF: ready]
+
+CONVERSATION CLOSING:
+- When a conversation feels naturally complete (invoice sent, question answered, etc.), let the customer know they can text "done" or "bye" whenever they're finished and we'll close things out.
+- If the customer texts back with new questions after an invoice, treat it as a continuation — do NOT ask them to re-verify.`;
 }
 
 export type AIIntent =
