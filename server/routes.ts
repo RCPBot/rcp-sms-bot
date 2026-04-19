@@ -48,6 +48,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
     }
 
     // Resolve any links in the message body (Google Drive, Dropbox, direct PDFs, etc.)
+    let linkResolveFailed = false;
     if (cleanBody) {
       try {
         const resolved = await resolveLinksFromText(cleanBody);
@@ -57,10 +58,19 @@ export function registerRoutes(httpServer: Server, app: Express) {
         }
         if (resolved.failedCount > 0) {
           console.warn(`[LinkResolver] ${resolved.failedCount} link(s) could not be resolved`);
+          if (resolved.resolvedCount === 0) linkResolveFailed = true;
         }
       } catch (err: any) {
         console.warn(`[LinkResolver] Error resolving links: ${err?.message}`);
+        linkResolveFailed = true;
       }
+    }
+
+    // If a link was sent but we couldn't open it, notify the customer right away
+    if (linkResolveFailed && mediaUrls.length === 0) {
+      const failMsg = `Sorry, we weren't able to open that link. Please try sending the file again, or call us at 469-631-7730 and we'll take care of it.`;
+      try { await sendSms(cleanPhone, failMsg); } catch {}
+      return;
     }
 
     // Require at least a body or an image
@@ -298,7 +308,12 @@ export function registerRoutes(httpServer: Server, app: Express) {
     } catch (err) {
       console.error("[SMS] Error processing message:", err);
       try {
-        await sendSms(cleanPhone, "Sorry, we hit a technical issue. Please call us at 469-631-7730 or try again in a moment.");
+        const techErr = "Sorry, we ran into a technical issue. Please try again in a moment or call us at 469-631-7730 and we'll help you out.";
+        try {
+          const errConv = storage.getConversationByPhone(cleanPhone);
+          if (errConv) storage.addMessage({ conversationId: errConv.id, direction: "outbound", body: techErr });
+        } catch {}
+        await sendSms(cleanPhone, techErr);
       } catch (_) {}
     }
   });
@@ -454,10 +469,9 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
     } catch (err) {
       console.error("[Order] Failed to create invoice:", err);
-      await sendSms(
-        phone,
-        `Your order is confirmed! Our team is processing it now and will send your invoice shortly. Questions? Call 469-631-7730.`
-      );
+      const orderErrMsg = `We had trouble creating your invoice. Please try again in a moment or call us at 469-631-7730 and we'll get it sorted out.`;
+      storage.addMessage({ conversationId, direction: "outbound", body: orderErrMsg });
+      try { await sendSms(phone, orderErrMsg); } catch {}
     }
   }
 
