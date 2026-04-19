@@ -1014,7 +1014,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
       if (!clientId) return res.status(400).send("QBO_CLIENT_ID not set");
       const params = new URLSearchParams({
         client_id: clientId,
-        redirect_uri: `${process.env.APP_URL || "http://localhost:5000"}/qbo-callback.html`,
+        redirect_uri: `${(process.env.APP_URL || "http://localhost:5000").replace(/^(?!https?:\/\/)/, "https://")}/qbo-callback.html`,
         response_type: "code",
         scope: "com.intuit.quickbooks.accounting",
         state: Math.random().toString(36).slice(2),
@@ -1159,7 +1159,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
       const clientId = process.env.QBO_CLIENT_ID!;
       const clientSecret = process.env.QBO_CLIENT_SECRET!;
-      const redirectUri = `${process.env.APP_URL || "http://localhost:5000"}/qbo-callback.html`;
+      const redirectUri = `${(process.env.APP_URL || "http://localhost:5000").replace(/^(?!https?:\/\/)/, "https://")}/qbo-callback.html`;
 
       const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
       const tokenRes = await fetch("https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer", {
@@ -1200,7 +1200,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
       const clientId = process.env.QBO_CLIENT_ID!;
       const clientSecret = process.env.QBO_CLIENT_SECRET!;
-      const redirectUri = `${process.env.APP_URL || "http://localhost:5000"}/api/qbo/callback`;
+      const redirectUri = `${(process.env.APP_URL || "http://localhost:5000").replace(/^(?!https?:\/\/)/, "https://")}/api/qbo/callback`;
 
       const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
       const tokenRes = await fetch("https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer", {
