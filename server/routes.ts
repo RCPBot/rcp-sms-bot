@@ -4,7 +4,7 @@ import express from "express";
 import { storage } from "./storage";
 import { sendSms, isTwilioConfigured, sendPaymentLinkEmail } from "./sms";
 import { processMessage, extractOrderFromConversation, extractCustomerInfo, isAiConfigured } from "./ai";
-import { syncProducts, findOrCreateCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice, updateRailwayEnvVar } from "./qbo";
+import { syncProducts, findOrCreateCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice, updateRailwayEnvVar, setLiveRefreshToken } from "./qbo";
 import { performTakeoff } from "./takeoff";
 import { resolveLinksFromText, extractUrls } from "./link-resolver";
 import { generateCutSheetPdf, emailCutSheet } from "./cutsheet";
@@ -1209,6 +1209,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
       process.env.QBO_REALM_ID = realmId;
       if (tokens.refresh_token) {
         process.env.QBO_REFRESH_TOKEN = tokens.refresh_token;
+        setLiveRefreshToken(tokens.refresh_token);
         try {
           console.log('[QBO] Saving refresh token to SQLite:', tokens.refresh_token.substring(0, 20));
           storage.setSetting("qbo_refresh_token", tokens.refresh_token);
@@ -1276,6 +1277,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
       process.env.QBO_REALM_ID = realmId;
       if (tokens.refresh_token) {
         process.env.QBO_REFRESH_TOKEN = tokens.refresh_token;
+        setLiveRefreshToken(tokens.refresh_token);
         try {
           console.log('[QBO] Saving refresh token to SQLite:', tokens.refresh_token.substring(0, 20));
           storage.setSetting("qbo_refresh_token", tokens.refresh_token);

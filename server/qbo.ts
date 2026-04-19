@@ -10,6 +10,13 @@ const DISCOVERY_URL = "https://developer.api.intuit.com/.well-known/openid_confi
 
 let _accessToken: string | null = null;
 let _tokenExpiry: number = 0;
+let liveRefreshToken: string | null = null;
+
+export function setLiveRefreshToken(token: string) {
+  liveRefreshToken = token;
+  _accessToken = null;
+  _tokenExpiry = 0;
+}
 
 export async function updateRailwayEnvVar(key: string, value: string): Promise<void> {
   try {
@@ -44,6 +51,7 @@ export async function updateRailwayEnvVar(key: string, value: string): Promise<v
 }
 
 function getCurrentRefreshToken(): string {
+  if (liveRefreshToken) return liveRefreshToken;
   // Prefer the rotated token persisted in SQLite; fall back to the env seed.
   const stored = storage.getSetting("qbo_refresh_token");
   return stored || process.env.QBO_REFRESH_TOKEN || "";
@@ -89,6 +97,7 @@ async function getAccessToken(): Promise<string> {
   // Persist the new refresh token if rotated — survives within the deployment
   // so subsequent refreshes use the latest token, not the stale env seed.
   if (data.refresh_token && data.refresh_token !== refreshToken) {
+    liveRefreshToken = data.refresh_token;
     storage.setSetting("qbo_refresh_token", data.refresh_token);
     console.log("[QBO] Refresh token rotated — persisted to SQLite settings table");
     updateRailwayEnvVar("QBO_REFRESH_TOKEN", data.refresh_token).catch(console.error);
