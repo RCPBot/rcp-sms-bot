@@ -14,6 +14,7 @@ export const conversations = sqliteTable("conversations", {
   verified: integer("verified", { mode: "boolean" }).notNull().default(false), // true = confirmed existing QBO customer
   status: text("status").notNull().default("active"), // active | completed | abandoned
   stage: text("stage").notNull().default("greeting"), // greeting | collecting_info | ordering | confirming | invoiced | paid
+  pendingImagesJson: text("pending_images_json"), // JSON array of image data URLs waiting for takeoff
   createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
   updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
 });

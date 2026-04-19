@@ -91,6 +91,15 @@ export function registerRoutes(httpServer: Server, app: Express) {
         }
       }
 
+      // ── Persist any resolved images so they survive across messages ─────────
+      // (e.g. customer sends link before verified; we store it and use it later)
+      if (mediaUrls.length > 0) {
+        const existing: string[] = conv.pendingImagesJson ? JSON.parse(conv.pendingImagesJson) : [];
+        const merged = [...existing, ...mediaUrls];
+        conv = storage.updateConversation(conv.id, { pendingImagesJson: JSON.stringify(merged) });
+        console.log(`[Images] Stored ${mediaUrls.length} image(s) — total pending: ${merged.length}`);
+      }
+
       // Save inbound message (append image note if MMS)
       const bodyWithMedia = mediaUrls.length > 0
         ? (cleanBody ? `${cleanBody} [📷 ${mediaUrls.length} image(s) attached]` : `[📷 ${mediaUrls.length} image(s) attached]`)
@@ -114,16 +123,28 @@ export function registerRoutes(httpServer: Server, app: Express) {
         return;
       }
 
+      // ── Helper: get all stored images for this conversation ─────────────────
+      const allImages = (): string[] => {
+        const stored: string[] = conv.pendingImagesJson ? JSON.parse(conv.pendingImagesJson) : [];
+        // merge live mediaUrls (deduplicated)
+        const combined = [...stored];
+        for (const u of mediaUrls) { if (!combined.includes(u)) combined.push(u); }
+        return combined;
+      };
+
       // ── Auto-detect plan set: 3+ images sent at once → run takeoff ──────────
       if (mediaUrls.length >= 3 && conv.verified && conv.stage !== "takeoff_pending") {
-        await handlePlanTakeoff(conv.id, cleanPhone, mediaUrls);
+        await handlePlanTakeoff(conv.id, cleanPhone, allImages());
         return;
       }
 
-      // ── If stage is takeoff_pending and images arrived, run the takeoff ─────
-      if (conv.stage === "takeoff_pending" && mediaUrls.length >= 1) {
-        await handlePlanTakeoff(conv.id, cleanPhone, mediaUrls);
-        return;
+      // ── If stage is takeoff_pending, run takeoff with all stored images ──────
+      if (conv.stage === "takeoff_pending") {
+        const imgs = allImages();
+        if (imgs.length >= 1) {
+          await handlePlanTakeoff(conv.id, cleanPhone, imgs);
+          return;
+        }
       }
 
       // Handle the message with AI (pass image URLs if any)
@@ -190,11 +211,10 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
       if (intent.type === "plan_takeoff") {
         // Customer triggered plan-to-estimate flow
-        // If they already sent images this message, run takeoff immediately
-        // Otherwise store stage and wait for images
-        if (mediaUrls.length >= 1) {
-          // Images arrived with the takeoff trigger — run it now
-          await handlePlanTakeoff(conv.id, cleanPhone, mediaUrls);
+        // Check for any stored images (from this or prior messages)
+        const imgs = allImages();
+        if (imgs.length >= 1) {
+          await handlePlanTakeoff(conv.id, cleanPhone, imgs);
         } else {
           // No images yet — AI already asked them to send pages; update stage
           storage.updateConversation(conv.id, { stage: "takeoff_pending" });
