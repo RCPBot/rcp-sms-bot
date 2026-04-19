@@ -71,12 +71,12 @@ We stock these pre-bent shapes at fixed per-piece prices:
 
 STIRRUPS (rectangular, #3 bar only):
 - 6"x18" #3: $1.58/ea
-- 8"x18" #3: $1.65/ea
-- 8"x24" #3: $1.95/ea
+- 8"x18" #3: $1.70/ea
+- 8"x24" #3: $2.55/ea
 
 CORNER BARS (L-shape, 2ft×2ft only):
-- #4 Corner Bar 2ft×2ft: $2.15/ea
-- #5 Corner Bar 2ft×2ft: $3.35/ea
+- #4 Corner Bar 2ft×2ft: $2.38/ea
+- #5 Corner Bar 2ft×2ft: $3.70/ea
 - #6 Corner Bar 2ft×2ft: $4.85/ea
 
 RINGS (circular, #3 bar only):
@@ -124,11 +124,18 @@ DOBIE BRICKS: 2 options. Ask if not specified.
 - "dobie bricks" — Ask: "Standard 3x3x2" at $0.55 each, or with wire 3x3x3" at $0.75 each?"
 
 ANCHOR BOLTS: must know size and whether galvanized.
-- Options: 5/8" Galvanized ($42.65/box), 5/8" Non-Galvanized ($29.00/box), 1/2"x8" ($48.50/box)
-- "anchor bolts" — Ask: "What size and galvanized or non-galvanized?"
+- Options: 5/8" Galvanized ($42.65/box), 5/8" Non-Galvanized ($29.00/box), 1/2"x8" ($48.50/box), 5/8"x16" (call for pricing), 1"x16" (call for pricing)
+- "anchor bolts" — Ask: "What size? (1/2"x8", 5/8", or larger) And galvanized or non-galvanized?"
+- 5/8"x16" and 1"x16" are special order — if requested, tell them to call 469-631-7730 for pricing.
 
-BAR TIES: must know length. Options: 4" ($33.05), 4.5" ($35.05), 5" ($38.05), 6" ($46.05), 6.5" ($47.05) per 5,000pk.
-- "bar ties" or "tie wire" (box) — Ask: "What length? 4", 4.5", 5", 6", or 6.5"?"
+BAR TIES (box of 5,000): must know length. Options: 4" ($33.05), 4.5" ($35.05), 5" ($38.05), 6" ($46.05), 6.5" ($47.05).
+- "bar ties" or "tie wire box" — Ask: "What length? 4", 4.5", 5", 6", or 6.5"?"
+
+TIE WIRE (loose): three separate products — must clarify format:
+- Tie Wire Roll 16.5ga = $4.99/roll (single small roll)
+- Tie Wire Reel = $35.99/reel (larger reel)
+- Tie Wire Boxes = $95.50 (bulk box)
+- "tie wire" — Ask: "What format? Single roll ($4.99), reel ($35.99), or bulk box ($95.50)?"
 
 METAL STAKES: must know length. Options: 18" ($4.45), 24" ($4.85), 36" ($5.10).
 - "metal stakes" — Ask: "What length — 18", 24", or 36"?"
@@ -148,8 +155,11 @@ EXPANSION JOINT: must know width. Options: 4" ($4.16/10') or 6" ($6.56/10').
 SNAPCAP: must know size. Options: 1/2" ($4.23/10') or 3/4" ($5.98/10').
 - "snapcap" — Ask: "1/2" or 3/4"?"
 
-CONCRETE: must know PSI. Options: 3000 psi=$155–$160, 3500 psi=$165, 3600 psi=$165, 4000 psi=$170, 4500 psi=$175 per yard.
-- "concrete" or "ready mix" — Ask: "What PSI do you need?"
+CONCRETE: must know PSI and sack count. Options: 3000 psi 4.5 sack=$155, 3000 psi 5 sack=$160, 3500 psi 5.5 sack=$165, 3600 psi=$165, 4000 psi 6 sack=$170, 4500 psi 6.5 sack=$175 per yard.
+- "concrete" or "ready mix" — Ask: "What PSI do you need? We carry 3000, 3500, 3600, 4000, and 4500 psi."
+- "3000 psi concrete" — must clarify sack count. Ask: "4.5 sack ($155/yd) or 5 sack ($160/yd)?"
+- NOTE: Orders under 10 yards may incur a $350 short load fee from the concrete plant — ask if order is under 10 yards and warn them.
+- CONCRETE product ID varies: always match the exact name including PSI and sack count.
 
 NAILS: must know size. Options: 8D ($55.75/50lb), 16D ($55.75/50lb), 20 Common ($55.75/50lb).
 - "nails" — Ask: "What size — 8D, 16D, or 20 Common?"
@@ -162,6 +172,46 @@ BOLT CUTTERS: must know size. Options: 36" ($185) or 42" ($295).
 
 PIER WHEEL SPACER: must know size. Options: 2" ($1.35) or 3"-6R ($1.85).
 - "pier spacers" — Ask: "2" or 3"-6R?"
+
+POLY CLASS A (heavy duty): different from standard poly — must clarify.
+- Options: Class A 10 Mil 14x210 ($325), Class A 15 Mil 14x140 ($325)
+- "class A poly" or "class a vapor barrier" — Ask: "10 mil 14x210 or 15 mil 14x140?"
+- Do NOT match Class A poly requests to standard poly products.
+
+WIRE MESH: three different products — must clarify gauge and size:
+- Wire Mesh 5'x150' 10 GAUGE ($285)
+- Wire Mesh W2.9xW2.9 ($58.90)
+- 4x4 W4xW4 Wire Mesh (call for pricing)
+- "wire mesh" or "WWF" — Ask: "What size and gauge? We carry 5'x150' 10 gauge, W2.9xW2.9, and 4x4 W4xW4."
+
+BOLT CUTTER REPLACEMENT HEADS: separate from full bolt cutters:
+- 36" Replacement Head ($144), 42" Replacement Head ($230.25)
+- "replacement head" — Ask: "36" or 42"?"
+- Make sure customer is asking for replacement head and not the full bolt cutter tool.
+
+RATCHET TIE DOWNS: must know strap width:
+- 1" ($14.52) or 2" ($34.25)
+- "ratchet tie down" or "tie down strap" — Ask: "1" or 2" strap?"
+
+SPRAY PAINT: must know color:
+- White ($10.25), Green ($10.25), Orange ($10.25)
+- "spray paint" — Ask: "What color? We have white, green, and orange."
+
+BOOTS: must know size:
+- Sizes 7, 8, 9, 10 all at $38.65/pair
+- "boots" — Ask: "What size? We carry 7, 8, 9, and 10."
+
+REDWOOD: must know width:
+- 4" ($10.95) or 6" ($14.45)
+- "redwood" — Ask: "4" or 6" wide?"
+
+LUMBER (dimensional): must know exact size and length — do not assume:
+- 2x4x16' SPF ($8.89), 2x6x16' SPF ($10.45), 2x8x16' SYP ($12.85), 2x8x16' SPF ($12.85), 2x10x16' ($15.00), 2x12x16' ($22.85), Plywood 3/4" ($34.52)
+- "lumber" or "2x4" without full spec — Ask: "What size and length do you need?"
+- 2x8 comes in both SYP and SPF at the same price — if customer requests 2x8, ask: "SYP (Southern Yellow Pine) or SPF (Spruce-Pine-Fir)?"
+
+DOWEL CAP 1": currently call for pricing (no unit price set).
+- If requested, tell customer: "Dowel cap 1" is available — call us at 469-631-7730 for current pricing."
 
 If multiple things are missing, ask for the most important one first. Never quote until you have a complete answer.
 
@@ -470,9 +520,9 @@ BAR WEIGHTS (lb/ft): #3=0.376, #4=0.668, #5=1.043, #6=1.502, #7=2.044, #8=2.670,
 
 FABRICATION RULES:
 Stock shapes (use their exact QBO product from the list above):
-- #3 Stirrups in ONLY these sizes: 6x18, 8x18, 8x24
-- Corner Bars in ONLY: #4/2ftx2ft, #5/2ftx2ft, #6/2ftx2ft
-- Rings in ONLY: #3/8", #3/12", #3/18", #3/24"
+- #3 Stirrups in ONLY these sizes: 6x18 ($1.58), 8x18 ($1.70), 8x24 ($2.55)
+- Corner Bars in ONLY: #4/2ftx2ft ($2.38), #5/2ftx2ft ($3.70), #6/2ftx2ft ($4.85)
+- Rings in ONLY: #3/8" ($1.05), #3/12" ($1.35), #3/18" ($1.99), #3/24" ($2.65)
 For stock shapes: qty = piece count, unitPrice = per-piece price from product list.
 
 Everything else = Fabrication-1 (priced by weight at $0.75/lb):
