@@ -222,6 +222,7 @@ export async function createInvoice(params: {
   const lines: any[] = params.lineItems.map((item, idx) => ({
     LineNum: idx + 1,
     Amount: item.amount,
+    ...(item.description ? { Description: item.description } : {}),
     DetailType: "SalesItemLineDetail",
     SalesItemLineDetail: {
       ItemRef: { value: item.qboItemId, name: item.name },
@@ -299,6 +300,7 @@ export async function createEstimate(params: {
   const lines: any[] = params.lineItems.map((item, idx) => ({
     LineNum: idx + 1,
     Amount: item.amount,
+    ...(item.description ? { Description: item.description } : {}),
     DetailType: "SalesItemLineDetail",
     SalesItemLineDetail: {
       ItemRef: { value: item.qboItemId, name: item.name },

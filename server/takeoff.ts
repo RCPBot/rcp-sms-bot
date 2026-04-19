@@ -110,6 +110,21 @@ Return ONLY valid JSON in exactly this format:
 }`;
 }
 
+// ── Unit conversion helpers ───────────────────────────────────────────────────
+// Vapor barrier: each roll is 20x100 = 2,000 SF
+const VAPOR_BARRIER_SF_PER_ROLL = 2000;
+// Concrete chairs: each bag has 500 pieces
+const CHAIRS_PER_BAG = 500;
+
+function isVaporBarrier(name: string): boolean {
+  const l = name.toLowerCase();
+  return l.includes("vapor") || l.includes("poly") || l.includes("visqueen") || l.includes("10 mil") || l.includes("10mil");
+}
+function isChair(name: string): boolean {
+  const l = name.toLowerCase();
+  return l.includes("chair") || l.includes("slab bolster") || l.includes("bar chair");
+}
+
 // ── Parse raw JSON into TakeoffResult ────────────────────────────────────────
 function parseRawTakeoff(raw: any, products: Product[]): TakeoffResult {
   const lineItems: LineItem[] = [];
@@ -125,22 +140,22 @@ function parseRawTakeoff(raw: any, products: Product[]): TakeoffResult {
     const stockBarsNeeded = Math.ceil(totalLF / stockLen);
     const weightPerFt = BAR_WEIGHT[barSize] ?? 0.668;
     const totalWeight = Math.round(totalLF * weightPerFt * 100) / 100;
+    const desc = `${barSize} • ${totalLF} LF total • ${stockBarsNeeded} bars @ 20' • ${totalWeight} lbs`;
 
-    // Try to match to a QBO product by product name or bar size
     const matched = matchProduct(sr.productName || barSize, stockBarsNeeded, "EA", products);
     if (matched) {
-      lineItems.push(matched);
+      lineItems.push({ ...matched, description: desc });
     } else {
-      // Not matched — add as custom note item
       lineItems.push({
         qboItemId: "CUSTOM",
-        name: `${barSize} Rebar (20' stock) — ${stockBarsNeeded} bars / ${totalLF} LF`,
+        name: `${barSize} Rebar (20' stock)`,
+        description: desc,
         qty: stockBarsNeeded,
         unitPrice: 0,
         amount: 0,
       });
     }
-    // Record fab-style row for the cut sheet (straight stock)
+    // Cut sheet row
     fabItems.push({
       mark: `S-${barSize.replace("#", "")}`,
       barSize,
@@ -163,28 +178,32 @@ function parseRawTakeoff(raw: any, products: Product[]): TakeoffResult {
     const weightPerFt = BAR_WEIGHT[barSize] ?? 0.668;
     const totalLF = qty * cutLengthFt;
     const totalWeight = Math.round(totalLF * weightPerFt * 100) / 100;
-    const priceLbs = Math.round(totalWeight * 0.75 * 100) / 100; // $0.75/lb
-
+    const priceLbs = Math.round(totalWeight * 0.75 * 100) / 100;
     const { barsPerStock, stockBarsNeeded } = calcStockBars(barSize, qty, cutLengthFt);
+    const mark = fr.mark || `F${fabItems.length + 1}`;
+    const bendDesc = fr.bendDescription || "Custom bend";
 
-    // Find Fabrication-1 item in products
+    // Full spec description for QBO line item
+    const desc = `Mark: ${mark} | ${barSize} | Qty: ${qty} pc | Cut length: ${cutLengthFt}' | ${bendDesc} | ${totalWeight} lbs total`;
+
     const fabProduct = products.find(p => p.name.toLowerCase().includes("fabrication-1") || p.name.toLowerCase() === "fabrication-1");
     lineItems.push({
       qboItemId: fabProduct?.qboItemId || "FAB-1",
-      name: `Fabrication-1: ${fr.mark || "Fab"} ${barSize} ${fr.bendDescription || "custom bend"}`,
-      qty: totalWeight, // priced by weight in QBO
+      name: `Fabrication-1`,
+      description: desc,
+      qty: totalWeight,
       unitPrice: 0.75,
       amount: priceLbs,
     });
 
     fabItems.push({
-      mark: fr.mark || `F${fabItems.length + 1}`,
+      mark,
       barSize,
       qty,
       lengthFt: cutLengthFt,
       totalLF,
       weightLbs: totalWeight,
-      bendDescription: fr.bendDescription || "Custom bend",
+      bendDescription: bendDesc,
       stockLengthFt: 20,
       barsPerStock,
       stockBarsNeeded,
@@ -193,14 +212,33 @@ function parseRawTakeoff(raw: any, products: Product[]): TakeoffResult {
 
   // ── Process other materials ───────────────────────────────────────────────
   for (const om of (raw.otherMaterials || [])) {
-    const qty = parseFloat(om.qty) || 1;
-    const matched = matchProduct(om.productName || om.name, qty, om.unit || "EA", products);
+    const rawQty = parseFloat(om.qty) || 1;
+    const unit: string = (om.unit || "EA").toUpperCase();
+    const matName: string = om.productName || om.name || "";
+
+    // Unit conversions
+    let qty = rawQty;
+    let desc = "";
+    if (isVaporBarrier(matName) && unit === "SF") {
+      const rolls = Math.ceil(rawQty / VAPOR_BARRIER_SF_PER_ROLL);
+      desc = `10 mil poly • ${rawQty.toLocaleString()} SF required • ${rolls} roll(s) @ 20×100 (2,000 SF/roll)`;
+      qty = rolls;
+    } else if (isChair(matName) && (unit === "EA" || unit === "PC" || unit === "PCS")) {
+      const bags = Math.ceil(rawQty / CHAIRS_PER_BAG);
+      desc = `${rawQty} pc required • ${bags} bag(s) @ 500 pc/bag`;
+      qty = bags;
+    } else {
+      desc = `${rawQty} ${unit}`;
+    }
+
+    const matched = matchProduct(matName, qty, unit, products);
     if (matched) {
-      lineItems.push(matched);
+      lineItems.push({ ...matched, description: desc });
     } else {
       lineItems.push({
         qboItemId: "CUSTOM",
-        name: `${om.name} — ${qty} ${om.unit || "EA"}`,
+        name: om.name || matName,
+        description: desc,
         qty,
         unitPrice: 0,
         amount: 0,

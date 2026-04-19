@@ -96,6 +96,7 @@ export type InsertEstimate = z.infer<typeof insertEstimateSchema>;
 export type LineItem = {
   qboItemId: string;
   name: string;
+  description?: string;  // Line-level description shown in QBO invoice/estimate
   qty: number;
   unitPrice: number;
   amount: number;
