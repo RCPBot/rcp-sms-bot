@@ -27,6 +27,7 @@ sqlite.exec(`
     verified INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'active',
     stage TEXT NOT NULL DEFAULT 'greeting',
+    pending_images_json TEXT,
     created_at INTEGER,
     updated_at INTEGER
   );
@@ -78,6 +79,14 @@ sqlite.exec(`
     created_at INTEGER
   );
 `);
+
+// ── Column migrations (safe: ignore error if column already exists) ───────────
+const migrations = [
+  `ALTER TABLE conversations ADD COLUMN pending_images_json TEXT`,
+];
+for (const sql of migrations) {
+  try { sqlite.exec(sql); } catch { /* column already exists — safe to ignore */ }
+}
 
 export interface IStorage {
   // Conversations
