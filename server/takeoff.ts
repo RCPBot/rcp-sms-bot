@@ -268,7 +268,7 @@ export async function performTakeoff(
           const end = Math.min(start + pagesPerChunk, totalPages);
           const chunkPdf = await PDFDocument.create();
           const pageIndices = Array.from({ length: end - start }, (_, i) => start + i);
-          const copiedPages = await chunkPdf.copyPagesFrom(srcPdf, pageIndices);
+          const copiedPages = await chunkPdf.copyPages(srcPdf, pageIndices);
           copiedPages.forEach(p => chunkPdf.addPage(p));
           const chunkBytes = await chunkPdf.save();
           console.log(`[Takeoff] Chunk ${chunkIndex + 1}: pages ${start + 1}-${end} (${Math.round(chunkBytes.length / 1024 / 1024 * 10) / 10}MB)`);
