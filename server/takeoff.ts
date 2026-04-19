@@ -133,6 +133,41 @@ function matchProduct(
   };
 }
 
+// ── Dedicated fuzzy matcher for stock rebar bars ─────────────────────────────
+// QBO names for stock bars vary ("Rebar #5 20' Stock", "#5 Rebar 20ft", etc),
+// so matchProduct's strict rules fail. This matcher loosens requirements:
+// must contain the bar size + the stock length + a "rebar/bar/steel" word,
+// and must not be a fab shape (stirrup, corner, ring, etc).
+function matchStockRebarProduct(
+  size: string,
+  stockLen: number,
+  qty: number,
+  products: Product[]
+): LineItem | null {
+  const sizeNum = size.replace('#', '').trim();
+  const lenStr = String(stockLen);
+
+  const candidates = products.filter(p => {
+    const pn = p.name.toLowerCase();
+    const hasSize = pn.includes(`#${sizeNum}`) || pn.includes(`no${sizeNum}`) || pn.includes(`no. ${sizeNum}`);
+    const hasLen = pn.includes(`${lenStr}'`) || pn.includes(`${lenStr} ft`) || pn.includes(`${lenStr}ft`) || pn.includes(`${lenStr} '`) || pn.includes(`${lenStr}-ft`);
+    const isRebar = pn.includes('rebar') || pn.includes('bar') || pn.includes('steel');
+    const isFabShape = /stirrup|corner|ring|tie|l-bar|u-bar|hook|hairpin/i.test(pn);
+    return hasSize && hasLen && isRebar && !isFabShape;
+  });
+
+  if (candidates.length === 0) return null;
+  const best = candidates.find(p => p.name.toLowerCase().includes(`${lenStr}'`)) || candidates[0];
+  const unitPrice = best.unitPrice ?? 0;
+  return {
+    qboItemId: best.qboItemId,
+    name: best.name,
+    qty,
+    unitPrice,
+    amount: Math.round(qty * unitPrice * 100) / 100,
+  };
+}
+
 // ── Stock bar calculation ─────────────────────────────────────────────────────
 function calcStockBars(
   barSize: string,
@@ -533,7 +568,7 @@ function normalizeToNewSchema(c: any): {
       totalLF = stickCount * stockLen;
     } else {
       totalLF = parseFloat(sr.totalLinearFt) || 0;
-      stickCount = Math.ceil(totalLF / stockLen);
+      stickCount = parseInt(sr.stickCount) || Math.ceil((parseFloat(sr.totalLinearFt) || 0) / stockLen) || 1;
     }
     const weightLb = sr.weightLb ?? Math.round(totalLF * (BAR_WEIGHT[normBar(barSize)] ?? 0.376) * 100) / 100;
     return { size: barSize, stockLengthFt: stockLen, cutLengthFt: stockLen, totalLinearFt: totalLF, stickCount, location: sr.location || "", weightLb };
@@ -608,13 +643,15 @@ function buildFromCutSheet(consolidated: any, products: Product[]): TakeoffResul
     }
   }
 
+  console.log(`[Takeoff] Stock groups: ${JSON.stringify([...stockGroups.entries()].map(([k,v]) => ({k, sticks: v.stickCount, lb: Math.round(v.weightLb)})))}`);
+
   let stockTotalLb = 0;
   const normalizedStockForTable: any[] = [];
   for (const g of stockGroups.values()) {
     stockTotalLb += g.weightLb;
     const name = `Rebar ${g.size} ${g.stockLen}'`;
     const desc = `${g.stickCount} stick(s) @ ${g.stockLen}' - ${Math.round(g.totalLF)} LF - ${Math.round(g.weightLb)} lb${g.locations.length ? ` - ${g.locations.join("; ")}` : ""}`;
-    const matched = matchProduct(name, g.stickCount, "EA", products);
+    const matched = matchStockRebarProduct(g.size, g.stockLen, g.stickCount, products);
     if (matched) {
       lineItems.push({ ...matched, description: desc });
     } else {
