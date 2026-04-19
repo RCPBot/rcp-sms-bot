@@ -1007,6 +1007,22 @@ export function registerRoutes(httpServer: Server, app: Express) {
     });
   });
 
+  // Admin: export current QBO refresh token (for saving to Railway env vars)
+  app.get('/api/qbo/token', async (req, res) => {
+    try {
+      const token = await storage.getSetting('qbo_refresh_token');
+      const envToken = process.env.QBO_REFRESH_TOKEN || '';
+      res.json({
+        db_token: token || null,
+        env_token: envToken ? envToken.substring(0, 20) + '...' : '(not set)',
+        source: token ? 'sqlite' : 'env',
+        timestamp: new Date().toISOString()
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ── QBO OAuth Flow (one-time setup) ─────────────────────────────────────────
   app.get("/api/qbo/connect", (_req, res) => {
     try {
