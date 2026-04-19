@@ -220,7 +220,7 @@ export async function performTakeoff(
   const systemPrompt = buildSystemPrompt(products);
 
   // Separate PDFs from images
-  const pdfUrls = mediaItems.filter(u => u.startsWith("pdf::")).map(u => u.slice(6));
+  const pdfUrls = mediaItems.filter(u => u.startsWith("pdf::")).map(u => u.slice(5));
   const imageUrls = mediaItems.filter(u => !u.startsWith("pdf::") && !u.startsWith("__"));
 
   if (pdfUrls.length > 0) {
