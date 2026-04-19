@@ -21,22 +21,58 @@ export function extractUrls(text: string): string[] {
   return (text.match(URL_REGEX) || []).map(u => u.replace(/[.,;)]+$/, ""));
 }
 
+// ── Unwrap security-scanner redirect URLs (Proofpoint, Safelinks, etc.) ──────
+export function unwrapSecurityUrl(url: string): string {
+  // Proofpoint URLDefense v2: u= param contains encoded URL
+  // e.g. https://urldefense.proofpoint.com/v2/url?u=https-3A__www.dropbox.com_...
+  if (url.includes("urldefense.proofpoint.com")) {
+    const match = url.match(/[?&]u=([^&]+)/);
+    if (match) {
+      try {
+        // Proofpoint encoding: - → %, _ → /, then URI decode
+        const decoded = decodeURIComponent(match[1].replace(/-([0-9A-F]{2})/gi, '%$1').replace(/_/g, '/'));
+        console.log(`[LinkResolver] Unwrapped Proofpoint URL → ${decoded}`);
+        return decoded;
+      } catch { /* fall through */ }
+    }
+  }
+  // Microsoft SafeLinks
+  if (url.includes("safelinks.protection.outlook.com")) {
+    const match = url.match(/[?&]url=([^&]+)/);
+    if (match) {
+      try {
+        const decoded = decodeURIComponent(match[1]);
+        console.log(`[LinkResolver] Unwrapped SafeLinks URL → ${decoded}`);
+        return decoded;
+      } catch { /* fall through */ }
+    }
+  }
+  return url;
+}
+
 // ── Normalize known share links to direct download URLs ──────────────────────
 export function normalizeUrl(url: string): string {
+  // First unwrap any security scanner wrappers
+  url = unwrapSecurityUrl(url);
+
   // Google Drive: /file/d/FILE_ID/view → /uc?export=download&id=FILE_ID
-  const gdrive = url.match(/drive\.google\.com\/file\/d\/([^/]+)/);
+  const gdrive = url.match(/drive\.google\.com\/file\/d\/([^/?]+)/);
   if (gdrive) return `https://drive.google.com/uc?export=download&id=${gdrive[1]}`;
 
   // Google Drive open?id= format
   const gdriveOpen = url.match(/drive\.google\.com\/open\?id=([^&]+)/);
   if (gdriveOpen) return `https://drive.google.com/uc?export=download&id=${gdriveOpen[1]}`;
 
-  // Dropbox: ?dl=0 → ?dl=1
-  if (url.includes("dropbox.com")) return url.replace("?dl=0", "?dl=1").replace("&dl=0", "&dl=1");
+  // Dropbox: force direct download
+  if (url.includes("dropbox.com")) {
+    // Remove dl param and re-add as dl=1, also handle ?st= and ?rlkey= params
+    const u = new URL(url);
+    u.searchParams.set("dl", "1");
+    return u.toString();
+  }
 
-  // OneDrive share link → embed direct download
+  // OneDrive share link → direct download
   if (url.includes("1drv.ms") || url.includes("onedrive.live.com")) {
-    // Encode and use the redirect trick
     const encoded = Buffer.from(url).toString("base64").replace(/=$/, "");
     return `https://api.onedrive.com/v1.0/shares/u!${encoded}/root/content`;
   }
