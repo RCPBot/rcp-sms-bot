@@ -88,6 +88,10 @@ REBAR & REINFORCEMENT:
 - Temperature/shrinkage steel: 0.0018 × b × h (Grade 60) or 0.0020 × b × h (Grade 40)
 - Development length: depends on bar size, f'c, and fy — rough rule: #4 in 3000 psi = ~15"
 - Rebar weight: #3=0.376 lb/ft, #4=0.668, #5=1.043, #6=1.502, #7=2.044, #8=2.670, #9=3.400, #10=4.303, #11=5.313
+- Standard bundle counts (20' bars, per Cascade Steel mill standard):
+  #3=264 bars/bundle, #4=152, #5=96, #6=68, #7=50, #8=38, #9=30, #10=24, #11=18, #14=10, #18=6
+- When a customer orders in BUNDLES (e.g. "2 bundles of #4"), multiply: 2 × 152 = 304 bars. Convert to total linear feet (304 × 20' = 6,080 lf) and look up the matching QBO product for that bar size at 20' length. Qty on the invoice/estimate = number of bars (pieces), NOT bundles.
+- Always confirm bundle-to-bar math with the customer before creating an invoice (e.g. "2 bundles of #4 = 304 bars at 20' each — is that right?")
 
 CONCRETE MIX DESIGN:
 - f'c 2500 psi: residential slabs, sidewalks, light footings
