@@ -240,7 +240,6 @@ export async function performTakeoff(
       inputContent.push({
         type: "input_file",
         file_url: pdfUrl,
-        filename: "plan.pdf",
       });
     }
 
