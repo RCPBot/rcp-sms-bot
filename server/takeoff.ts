@@ -224,11 +224,35 @@ export async function performTakeoff(
   const imageUrls = mediaItems.filter(u => !u.startsWith("pdf::") && !u.startsWith("__"));
 
   if (pdfUrls.length > 0) {
-    // ── Use Responses API with input_file (PDF) ─────────────────────────────
-    console.log(`[Takeoff] Using Responses API for ${pdfUrls.length} PDF(s)`);
+    // ── Use Responses API with input_file (file_id) ──────────────────────────
+    // Download the PDF ourselves, upload to OpenAI Files API, then pass file_id.
+    // This avoids OpenAI needing to fetch from Dropbox (which blocks server requests).
+    console.log(`[Takeoff] Downloading and uploading ${pdfUrls.length} PDF(s) to OpenAI Files API`);
     const client = getClient();
+    const uploadedFileIds: string[] = [];
 
-    // Build input content parts: system text + each PDF file + instruction
+    for (const pdfUrl of pdfUrls) {
+      console.log(`[Takeoff] Downloading PDF: ${pdfUrl.substring(0, 80)}...`);
+      const dlResp = await globalThis.fetch(pdfUrl, {
+        headers: { "User-Agent": "RCPBot/1.0" },
+        redirect: "follow",
+      });
+      if (!dlResp.ok) throw new Error(`HTTP ${dlResp.status} downloading PDF`);
+      const pdfBuffer = Buffer.from(await dlResp.arrayBuffer());
+      console.log(`[Takeoff] PDF downloaded: ${pdfBuffer.length} bytes — uploading to OpenAI`);
+
+      // Upload to OpenAI Files API
+      const { toFile } = await import("openai");
+      const fileObj = await toFile(pdfBuffer, "plan.pdf", { type: "application/pdf" });
+      const uploaded = await client.files.create({
+        file: fileObj,
+        purpose: "user_data",
+      });
+      console.log(`[Takeoff] Uploaded to OpenAI Files API: ${uploaded.id}`);
+      uploadedFileIds.push(uploaded.id);
+    }
+
+    // Build input content parts: system text + each PDF file_id + instruction
     const inputContent: any[] = [
       {
         type: "input_text",
@@ -236,41 +260,50 @@ export async function performTakeoff(
       },
     ];
 
-    for (const pdfUrl of pdfUrls) {
+    for (const fileId of uploadedFileIds) {
       inputContent.push({
         type: "input_file",
-        file_url: pdfUrl,
+        file_id: fileId,
       });
     }
 
     inputContent.push({
       type: "input_text",
-      text: `Here ${pdfUrls.length === 1 ? "is" : "are"} ${pdfUrls.length} PDF plan set(s). Please perform a complete material takeoff for rebar, vapor barrier, chairs, forming lumber, stakes, tie wire, and anything else that matches our product catalog. Be thorough — examine every page carefully.`,
+      text: `Here ${uploadedFileIds.length === 1 ? "is" : "are"} ${uploadedFileIds.length} PDF plan set(s). Please perform a complete material takeoff for rebar, vapor barrier, chairs, forming lumber, stakes, tie wire, and anything else that matches our product catalog. Be thorough — examine every page carefully.`,
     });
 
-    const response = await client.responses.create({
-      model: "gpt-4o",
-      input: [
-        {
-          role: "user",
-          content: inputContent,
-        },
-      ],
-      text: { format: { type: "json_object" } },
-      max_output_tokens: 4000,
-      temperature: 0,
-    } as any);
-
-    // Extract text from response
     let rawText = "";
-    const output = (response as any).output;
-    if (Array.isArray(output)) {
-      for (const item of output) {
-        if (item.type === "message" && Array.isArray(item.content)) {
-          for (const part of item.content) {
-            if (part.type === "output_text") rawText += part.text;
+    try {
+      const response = await client.responses.create({
+        model: "gpt-4o",
+        input: [
+          {
+            role: "user",
+            content: inputContent,
+          },
+        ],
+        text: { format: { type: "json_object" } },
+        max_output_tokens: 4000,
+        temperature: 0,
+      } as any);
+
+      // Extract text from response
+      const output = (response as any).output;
+      if (Array.isArray(output)) {
+        for (const item of output) {
+          if (item.type === "message" && Array.isArray(item.content)) {
+            for (const part of item.content) {
+              if (part.type === "output_text") rawText += part.text;
+            }
           }
         }
+      }
+    } finally {
+      // Clean up uploaded files from OpenAI (fire-and-forget)
+      for (const fileId of uploadedFileIds) {
+        client.files.delete(fileId).catch(err =>
+          console.warn(`[Takeoff] Failed to delete OpenAI file ${fileId}: ${err?.message}`)
+        );
       }
     }
 
