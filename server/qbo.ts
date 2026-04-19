@@ -85,7 +85,7 @@ async function qboPost(path: string, body: object) {
 
 // Post with automatic DocNumber retry on duplicate (QBO error code 6140)
 async function qboPostWithDocRetry(path: string, body: Record<string, any>): Promise<any> {
-  const MAX_RETRIES = 5;
+  const MAX_RETRIES = 20;
   let attempt = 0;
   let currentDoc: string = body.DocNumber || "";
 
@@ -366,6 +366,10 @@ export async function createEstimate(params: {
     estimateLink = linkData?.InvoiceLink || null;
   } catch (_) {
     console.warn("[QBO] Could not get estimate link");
+  }
+  // Fallback: direct QBO estimate URL (works even without QBO Payments activated)
+  if (!estimateLink) {
+    estimateLink = `https://app.qbo.intuit.com/app/estimate?txnId=${estimate.Id}`;
   }
 
   return {

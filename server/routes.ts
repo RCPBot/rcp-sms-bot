@@ -299,7 +299,8 @@ export function registerRoutes(httpServer: Server, app: Express) {
       };
 
       // ── Auto-detect plan set: 3+ images OR any PDF sent → run takeoff ───────
-      if ((mediaUrls.length >= 3 || pdfUrls.length >= 1) && conv.verified && conv.stage !== "takeoff_pending") {
+      // Only run if not already mid-estimate or invoiced — prevents re-running on follow-up messages
+      if ((mediaUrls.length >= 3 || pdfUrls.length >= 1) && conv.verified && conv.stage !== "takeoff_pending" && conv.stage !== "estimating" && conv.stage !== "invoice_review" && conv.stage !== "invoiced") {
         await handlePlanTakeoff(conv.id, cleanPhone, allImages(), rawPlanUrl);
         return;
       }
