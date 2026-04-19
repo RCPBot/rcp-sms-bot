@@ -318,26 +318,44 @@ export async function performTakeoff(
         ];
 
         let rawText = "";
-        const response = await client.responses.create({
-          model: "gpt-4o",
-          input: [
-            {
-              role: "user",
-              content: inputContent,
-            },
-          ],
-          text: { format: { type: "json_object" } },
-          max_output_tokens: 4000,
-          temperature: 0,
-        } as any);
+        // Retry loop for rate limit errors
+        let attempts = 0;
+        while (attempts < 5) {
+          try {
+            const response = await client.responses.create({
+              model: "gpt-4o",
+              input: [
+                {
+                  role: "user",
+                  content: inputContent,
+                },
+              ],
+              text: { format: { type: "json_object" } },
+              max_output_tokens: 4000,
+              temperature: 0,
+            } as any);
 
-        const output = (response as any).output;
-        if (Array.isArray(output)) {
-          for (const item of output) {
-            if (item.type === "message" && Array.isArray(item.content)) {
-              for (const part of item.content) {
-                if (part.type === "output_text") rawText += part.text;
+            const output = (response as any).output;
+            if (Array.isArray(output)) {
+              for (const item of output) {
+                if (item.type === "message" && Array.isArray(item.content)) {
+                  for (const part of item.content) {
+                    if (part.type === "output_text") rawText += part.text;
+                  }
+                }
               }
+            }
+            break; // success
+          } catch (err: any) {
+            if (err?.status === 429 || err?.code === 'rate_limit_exceeded') {
+              // Parse retry-after from error message, default 60s
+              const match = err?.message?.match(/(\d+\.?\d*)\s*s\b/);
+              const waitSec = match ? Math.ceil(parseFloat(match[1])) + 5 : 65;
+              console.log(`[Takeoff] Rate limited on chunk ${i + 1}, waiting ${waitSec}s before retry...`);
+              await new Promise(r => setTimeout(r, waitSec * 1000));
+              attempts++;
+            } else {
+              throw err;
             }
           }
         }
