@@ -16,13 +16,6 @@ import * as os from "os";
 const OWNER_EMAIL = "maddoxconstruction1987@gmail.com";
 const TAX_RATE = 0.0825; // McKinney, TX: 8.25% combined sales tax
 
-function extractPhoneFromText(text: string): string | null {
-  const match = text.match(/(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
-  if (!match) return null;
-  const digits = match[0].replace(/\D/g, "").slice(-10);
-  return digits.length === 10 ? digits : null;
-}
-
 // Sync QBO products on startup, then every 30 minutes
 async function startProductSync() {
   if (isQboConfigured()) {
@@ -183,31 +176,8 @@ export function registerRoutes(httpServer: Server, app: Express) {
             });
             console.log(`[Verify] Auto-verified ${cleanPhone} as QBO customer: ${found.name}`);
           } else {
-            // Second attempt: did they include a phone number in their message?
-            let embeddedVerified = false;
-            if (cleanBody) {
-              const embeddedPhone = extractPhoneFromText(cleanBody);
-              const inboundDigitsOnly = cleanPhone.replace(/\D/g, "").slice(-10);
-              if (embeddedPhone && embeddedPhone !== inboundDigitsOnly) {
-                const foundByEmbedded = await lookupCustomerByPhone(embeddedPhone);
-                if (foundByEmbedded) {
-                  conv = storage.updateConversation(conv.id, {
-                    verified: true,
-                    qboCustomerId: foundByEmbedded.id,
-                    customerName: foundByEmbedded.name,
-                    customerEmail: foundByEmbedded.email,
-                    customerCompany: foundByEmbedded.company || null,
-                    stage: "ordering",
-                  });
-                  embeddedVerified = true;
-                  console.log(`[Verify] Auto-verified via embedded phone ${embeddedPhone} as QBO customer: ${foundByEmbedded.name}`);
-                }
-              }
-            }
-            if (!embeddedVerified) {
-              // Neither lookup matched — AI will ask for verification info
-              console.log(`[Verify] ${cleanPhone} not found in QBO customer list`);
-            }
+            // Phone not in QBO — mark unverified, AI will handle the messaging
+            console.log(`[Verify] ${cleanPhone} not found in QBO customer list`);
           }
         }
       }
