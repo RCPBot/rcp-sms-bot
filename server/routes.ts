@@ -41,6 +41,16 @@ export function registerRoutes(httpServer: Server, app: Express) {
     const cleanPhone = fromPhone.trim();
     const cleanBody = (messageBody || "").trim();
 
+    // Log all inbound media for diagnostics
+    const numMediaRaw = parseInt(NumMedia || "0", 10);
+    if (numMediaRaw > 0) {
+      for (let _i = 0; _i < numMediaRaw; _i++) {
+        console.log(`[MMS] Inbound media ${_i}: URL=${req.body[`MediaUrl${_i}`]?.substring(0,60)} Type=${req.body[`MediaContentType${_i}`]}`);
+      }
+    } else {
+      console.log(`[SMS] Inbound text-only message from ${cleanPhone}: "${cleanBody.substring(0,60)}"`);
+    }
+
     // Collect any MMS media Twilio sends (images + PDFs)
     // Download with Basic auth — Twilio URLs require it; OpenAI can't fetch them directly.
     const mediaUrls: string[] = [];
@@ -290,6 +300,13 @@ export function registerRoutes(httpServer: Server, app: Express) {
         const imgs = allImages();
         if (imgs.length >= 1) {
           await handlePlanTakeoff(conv.id, cleanPhone, imgs);
+          return;
+        }
+        // No files yet — remind customer to send a link
+        if (!cleanBody.includes("http") && mediaUrls.length === 0 && pdfUrls.length === 0) {
+          const remind = `Still waiting on your plan set. Please share a Dropbox or Google Drive link and I'll start the takeoff right away. Attaching a PDF file directly over text may not come through.`;
+          storage.addMessage({ conversationId: conv.id, direction: "outbound", body: remind });
+          await sendSms(cleanPhone, remind);
           return;
         }
       }
