@@ -11,6 +11,7 @@ import { generateCutSheetPdf, emailCutSheet } from "./cutsheet";
 import type { LineItem } from "@shared/schema";
 
 const OWNER_EMAIL = "maddoxconstruction1987@gmail.com";
+const TAX_RATE = 0.0825; // McKinney, TX: 8.25% combined sales tax
 
 // Sync QBO products on startup, then every 30 minutes
 async function startProductSync() {
@@ -298,7 +299,8 @@ export function registerRoutes(httpServer: Server, app: Express) {
         console.log(`[Order] Free delivery applied: ${deliveryMiles} mi, subtotal $${subtotal}`);
       }
 
-      const total = subtotal + deliveryFee;
+      const taxAmount = +(subtotal * TAX_RATE).toFixed(2);
+      const total = subtotal + taxAmount + deliveryFee;
 
       // Create QBO customer if needed
       let qboCustomerId = conv.qboCustomerId;
@@ -345,7 +347,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
         subtotal,
         deliveryFee,
         deliveryMiles: deliveryMiles ?? null,
-        total,
+        total,  // includes tax + delivery
         deliveryType: orderData.deliveryType,
         status: invoiceId ? "invoiced" : "pending",
       });
@@ -357,11 +359,12 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
       const freeDeliveryNote = qualifiesFreeDelivery ? " Free delivery applied!" : "";
 
+      const deliveryLine = deliveryFee > 0 ? `\nDelivery: $${deliveryFee.toFixed(2)}` : "";
       const smsBody = paymentLink
-        ? `Invoice #${invoiceNumber} created!${freeDeliveryNote} Total: $${total.toFixed(2)}\n\nPay here: ${paymentLink}\n\nWe'll also email the invoice to ${conv.customerEmail}.`
+        ? `Invoice #${invoiceNumber} created!${freeDeliveryNote}\n\nSubtotal: $${subtotal.toFixed(2)}\nTax (8.25%): $${taxAmount.toFixed(2)}${deliveryLine}\nTotal: $${total.toFixed(2)}\n\nPay here: ${paymentLink}\n\nWe'll also email the invoice to ${conv.customerEmail}.`
         : invoiceId
-        ? `Invoice #${invoiceNumber} created for $${total.toFixed(2)}.${freeDeliveryNote} We emailed it to ${conv.customerEmail} with the payment link. Thank you!`
-        : `Order confirmed.${freeDeliveryNote} Total: $${total.toFixed(2)}. Our team will follow up shortly with your invoice. Thank you!`;
+        ? `Invoice #${invoiceNumber} created.${freeDeliveryNote}\n\nSubtotal: $${subtotal.toFixed(2)}\nTax (8.25%): $${taxAmount.toFixed(2)}${deliveryLine}\nTotal: $${total.toFixed(2)}\n\nWe emailed it to ${conv.customerEmail}. Thank you!`
+        : `Order confirmed.${freeDeliveryNote}\n\nSubtotal: $${subtotal.toFixed(2)}\nTax (8.25%): $${taxAmount.toFixed(2)}\nTotal: $${total.toFixed(2)}\n\nOur team will follow up shortly with your invoice. Thank you!`;
 
       let smsSent = false;
       try {
@@ -467,13 +470,17 @@ export function registerRoutes(httpServer: Server, app: Express) {
       const fabCount = takeoffResult.fabItems.filter(f => !f.bendDescription.includes("stock length")).length;
       const fabNote = fabCount > 0 ? `\n${fabCount} custom fab item(s) @ $0.75/lb included.` : "";
 
+      const estimateTax = subtotal * TAX_RATE;
+      const estimateTotal = subtotal + estimateTax;
+      const taxLine = `\nTax (8.25%): $${estimateTax.toFixed(2)}\nEstimated Total: $${estimateTotal.toFixed(2)}`;
+
       let replyText: string;
       if (estimateLink) {
-        replyText = `Takeoff complete for ${takeoffResult.projectName}!\n\n${top5}${moreCount}${fabNote}\n\nSubtotal: $${subtotal.toFixed(2)}\n\nView & approve your estimate:\n${estimateLink}\n\nOnce you approve, we\'ll process your fabrication order.`;
+        replyText = `Takeoff complete for ${takeoffResult.projectName}!\n\n${top5}${moreCount}${fabNote}\n\nSubtotal: $${subtotal.toFixed(2)}${taxLine}\n\nView & approve your estimate:\n${estimateLink}\n\nOnce you approve, we\'ll process your fabrication order.`;
       } else if (estimateNumber) {
-        replyText = `Takeoff complete for ${takeoffResult.projectName}!\n\n${top5}${moreCount}${fabNote}\n\nSubtotal: $${subtotal.toFixed(2)}\n\nEstimate #${estimateNumber} emailed to ${conv.customerEmail}. Reply APPROVE to confirm.`;
+        replyText = `Takeoff complete for ${takeoffResult.projectName}!\n\n${top5}${moreCount}${fabNote}\n\nSubtotal: $${subtotal.toFixed(2)}${taxLine}\n\nEstimate #${estimateNumber} emailed to ${conv.customerEmail}. Reply APPROVE to confirm.`;
       } else {
-        replyText = `Takeoff complete for ${takeoffResult.projectName}!\n\n${top5}${moreCount}${fabNote}\n\nSubtotal: $${subtotal.toFixed(2)}\n\nReply APPROVE to confirm this estimate, or call 469-631-7730 with questions.`;
+        replyText = `Takeoff complete for ${takeoffResult.projectName}!\n\n${top5}${moreCount}${fabNote}\n\nSubtotal: $${subtotal.toFixed(2)}${taxLine}\n\nReply APPROVE to confirm this estimate, or call 469-631-7730 with questions.`;
       }
 
       storage.addMessage({ conversationId, direction: "outbound", body: replyText });
