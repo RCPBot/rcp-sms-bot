@@ -352,6 +352,11 @@ export function registerRoutes(httpServer: Server, app: Express) {
           body: replyText,
         });
         await sendSms(cleanPhone, replyText);
+      } else if (!replyText && intent.type !== "lookup_orders" && intent.type !== "plan_takeoff") {
+        // AI returned no text — send a fallback so the customer isn't left hanging
+        const fallback = "Sorry, I wasn't able to process that. Please call us at 469-631-7730 and we'll help you out.";
+        storage.addMessage({ conversationId: conv.id, direction: "outbound", body: fallback });
+        await sendSms(cleanPhone, fallback);
       }
 
       // Handle special intents
@@ -628,7 +633,8 @@ export function registerRoutes(httpServer: Server, app: Express) {
           : `I couldn't extract materials from those images. Make sure all pages are clear and in focus. Try resending or call us at 469-631-7730 for a manual quote.`;
         console.error(`[Takeoff] Zero line items — imageUrls: ${JSON.stringify(imageUrls.map(u => u.substring(0,80)))}`);
         storage.addMessage({ conversationId, direction: "outbound", body: errMsg });
-        await sendSms(phone, errMsg);
+        await sendSms(cleanPhone, errMsg);
+        storage.updateConversation(conversationId, { stage: "ordering" });
         storage.updateConversation(conversationId, { stage: "ordering" });
         return;
       }
@@ -693,12 +699,21 @@ export function registerRoutes(httpServer: Server, app: Express) {
       // Split into priced items (amount > 0) and unpriced (qty/length TBD)
       const pricedItems = items.filter(i => i.amount > 0);
       const unpricedItems = items.filter(i => i.amount === 0);
+
+      // If nothing could be priced, tell customer and ask them to call
+      if (pricedItems.length === 0) {
+        const noPrice = `We were able to identify the materials in your plan set but couldn't determine quantities automatically. Please call us at 469-631-7730 and we'll put together a manual quote for you.\n\nItems identified:\n${unpricedItems.map(i => `- ${i.name}`).join("\n")}`;
+        storage.addMessage({ conversationId, direction: "outbound", body: noPrice });
+        await sendSms(cleanPhone, noPrice);
+        storage.updateConversation(conversationId, { stage: "ordering" });
+        return;
+      }
       const top5 = pricedItems.slice(0, 5).map(i => `${i.qty > 1 ? i.qty + "x " : ""}${i.name}: $${i.amount.toFixed(2)}`).join("\n");
       const moreCount = pricedItems.length > 5 ? `\n+ ${pricedItems.length - 5} more items` : "";
       const fabCount = takeoffResult.fabItems.filter(f => !f.bendDescription.includes("stock length")).length;
       const fabNote = fabCount > 0 ? `\n${fabCount} custom fab item(s) @ $0.75/lb included.` : "";
       const tbdNote = unpricedItems.length > 0
-        ? `\n\nNeeds field verification (qty not found in plans):\n${unpricedItems.map(i => `- ${i.name}`).join("\n")}`
+        ? `\n\nCould not determine qty from plans (call 469-631-7730 to add):\n${unpricedItems.map(i => `- ${i.name}`).join("\n")}`
         : "";
 
       const estimateTax = subtotal * TAX_RATE;
@@ -724,9 +739,10 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
     } catch (err) {
       console.error("[Takeoff] Error:", err);
-      const errMsg = `Something went wrong processing your plans. Please call us at 469-631-7730 and we\'ll get you a quote right away.`;
+      const errMsg = `Something went wrong while reading your plan set. Please call us at 469-631-7730 and we\'ll get you a quote right away — usually within the hour.`;
       storage.addMessage({ conversationId, direction: "outbound", body: errMsg });
-      await sendSms(phone, errMsg);
+      await sendSms(cleanPhone, errMsg);
+      storage.updateConversation(conversationId, { stage: "ordering" });
     }
   }
 
@@ -790,6 +806,10 @@ export function registerRoutes(httpServer: Server, app: Express) {
           console.log(`[Estimate] Converted estimate ${estimateNumber} → invoice ${invoiceNumber}`);
         } catch (convErr) {
           console.error("[Estimate] Failed to convert estimate to invoice:", convErr);
+          // Notify customer so they aren't left waiting
+          const convErrMsg = `Your estimate has been approved. We had a technical issue creating the invoice automatically — our team will follow up shortly, or call us at 469-631-7730.`;
+          storage.addMessage({ conversationId, direction: "outbound", body: convErrMsg });
+          await sendSms(phone, convErrMsg);
         }
       }
 
