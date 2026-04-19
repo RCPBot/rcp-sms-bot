@@ -617,8 +617,9 @@ export function registerRoutes(httpServer: Server, app: Express) {
         .map(i => `  • ${i.qty > 1 ? i.qty + "x " : ""}${i.name}: $${i.amount.toFixed(2)}`)
         .join("\n");
 
+      const displayInvoiceNumber = invoiceNumber || invoiceId || "pending";
       const reviewMsg = [
-        `Invoice #${invoiceNumber} is ready.${freeDeliveryNote}`,
+        `Invoice #${displayInvoiceNumber} is ready.${freeDeliveryNote}`,
         ``,
         itemLines,
         ``,
@@ -636,6 +637,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
         pendingImagesJson: JSON.stringify({ __paymentLink: paymentLink, __invoiceNumber: invoiceNumber, __total: total, __taxAmount: taxAmount, __subtotal: subtotal, __deliveryFee: deliveryFee }),
       });
 
+      storage.addMessage({ conversationId, direction: "outbound", body: reviewMsg });
       try { await sendSms(phone, reviewMsg); } catch (e: any) {
         console.error(`[SMS] Failed to send invoice review: ${e?.message}`);
       }
