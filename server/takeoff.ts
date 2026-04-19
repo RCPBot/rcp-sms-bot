@@ -253,80 +253,96 @@ export async function performTakeoff(
         uploadedFileIds.push(uploaded.id);
       } else {
         // Too large — split into page chunks using pdf-lib
+        // We split adaptively: if a chunk is still too big after saving, halve it.
         console.log(`[Takeoff] PDF too large (${pdfBuffer.length} bytes), splitting into chunks...`);
         const srcPdf = await PDFDocument.load(pdfBuffer);
         const totalPages = srcPdf.getPageCount();
-        console.log(`[Takeoff] PDF has ${totalPages} pages, splitting into chunks`);
+        console.log(`[Takeoff] PDF has ${totalPages} pages, splitting adaptively`);
 
-        // Estimate pages per chunk: assume ~equal size distribution
-        const bytesPerPage = pdfBuffer.length / totalPages;
-        const pagesPerChunk = Math.max(1, Math.floor(MAX_CHUNK_BYTES / bytesPerPage));
-        console.log(`[Takeoff] ~${Math.ceil(bytesPerPage/1024)}KB/page → ${pagesPerChunk} pages/chunk`);
+        // Build list of page-range segments to process (start inclusive, end exclusive)
+        // Uses a queue: if a segment's rendered PDF is too big, split it in half.
+        const segments: Array<[number, number]> = [[0, totalPages]];
+        const readyChunks: Uint8Array[] = [];
 
-        let chunkIndex = 0;
-        for (let start = 0; start < totalPages; start += pagesPerChunk) {
-          const end = Math.min(start + pagesPerChunk, totalPages);
-          const chunkPdf = await PDFDocument.create();
+        while (segments.length > 0) {
+          const [start, end] = segments.shift()!;
           const pageIndices = Array.from({ length: end - start }, (_, i) => start + i);
+          const chunkPdf = await PDFDocument.create();
           const copiedPages = await chunkPdf.copyPages(srcPdf, pageIndices);
           copiedPages.forEach(p => chunkPdf.addPage(p));
           const chunkBytes = await chunkPdf.save();
-          console.log(`[Takeoff] Chunk ${chunkIndex + 1}: pages ${start + 1}-${end} (${Math.round(chunkBytes.length / 1024 / 1024 * 10) / 10}MB)`);
+          const mb = Math.round(chunkBytes.length / 1024 / 1024 * 10) / 10;
 
-          const fileObj = await toFile(Buffer.from(chunkBytes), `plan-chunk-${chunkIndex + 1}.pdf`, { type: "application/pdf" });
+          if (chunkBytes.length > MAX_CHUNK_BYTES && (end - start) > 1) {
+            // Still too big — split in half and re-queue
+            const mid = Math.floor((start + end) / 2);
+            console.log(`[Takeoff] Pages ${start + 1}-${end} = ${mb}MB > limit, halving into ${start+1}-${mid} and ${mid+1}-${end}`);
+            segments.unshift([mid, end]);
+            segments.unshift([start, mid]);
+          } else {
+            console.log(`[Takeoff] Segment pages ${start + 1}-${end} = ${mb}MB — OK`);
+            readyChunks.push(chunkBytes);
+          }
+        }
+
+        // Upload all approved chunks
+        for (let i = 0; i < readyChunks.length; i++) {
+          const fileObj = await toFile(Buffer.from(readyChunks[i]), `plan-chunk-${i + 1}.pdf`, { type: "application/pdf" });
           const uploaded = await client.files.create({ file: fileObj, purpose: "user_data" });
-          console.log(`[Takeoff] Uploaded chunk ${chunkIndex + 1} to OpenAI: ${uploaded.id}`);
+          console.log(`[Takeoff] Uploaded chunk ${i + 1}/${readyChunks.length} to OpenAI: ${uploaded.id}`);
           uploadedFileIds.push(uploaded.id);
-          chunkIndex++;
         }
       }
     }
 
-    // Build input content parts: system text + each PDF file_id + instruction
-    const inputContent: any[] = [
-      {
-        type: "input_text",
-        text: systemPrompt,
-      },
-    ];
-
-    for (const fileId of uploadedFileIds) {
-      inputContent.push({
-        type: "input_file",
-        file_id: fileId,
-      });
-    }
-
-    inputContent.push({
-      type: "input_text",
-      text: `Here ${uploadedFileIds.length === 1 ? "is" : "are"} ${uploadedFileIds.length} PDF file(s) containing the customer's plan set (large PDFs are split into chunks — treat them as one continuous plan set). Please perform a complete material takeoff for rebar, vapor barrier, chairs, forming lumber, stakes, tie wire, and anything else that matches our product catalog. Be thorough — examine every page carefully.`,
-    });
-
-    let rawText = "";
+    // Process each file_id separately (Responses API 50MB total limit per request)
+    // Then merge all partial takeoff JSONs into one combined result.
+    const allPartialRaws: any[] = [];
     try {
-      const response = await client.responses.create({
-        model: "gpt-4o",
-        input: [
+      for (let i = 0; i < uploadedFileIds.length; i++) {
+        const fileId = uploadedFileIds[i];
+        console.log(`[Takeoff] Running Responses API for chunk ${i + 1}/${uploadedFileIds.length} (file: ${fileId})`);
+        const inputContent: any[] = [
           {
-            role: "user",
-            content: inputContent,
+            type: "input_text",
+            text: systemPrompt,
           },
-        ],
-        text: { format: { type: "json_object" } },
-        max_output_tokens: 4000,
-        temperature: 0,
-      } as any);
+          {
+            type: "input_file",
+            file_id: fileId,
+          },
+          {
+            type: "input_text",
+            text: `This is chunk ${i + 1} of ${uploadedFileIds.length} from the customer's plan set (large PDFs are split into chunks). Perform a complete material takeoff for rebar, vapor barrier, chairs, forming lumber, stakes, tie wire, and anything else visible. Be thorough — examine every page carefully. Return JSON in the exact format specified.`,
+          },
+        ];
 
-      // Extract text from response
-      const output = (response as any).output;
-      if (Array.isArray(output)) {
-        for (const item of output) {
-          if (item.type === "message" && Array.isArray(item.content)) {
-            for (const part of item.content) {
-              if (part.type === "output_text") rawText += part.text;
+        let rawText = "";
+        const response = await client.responses.create({
+          model: "gpt-4o",
+          input: [
+            {
+              role: "user",
+              content: inputContent,
+            },
+          ],
+          text: { format: { type: "json_object" } },
+          max_output_tokens: 4000,
+          temperature: 0,
+        } as any);
+
+        const output = (response as any).output;
+        if (Array.isArray(output)) {
+          for (const item of output) {
+            if (item.type === "message" && Array.isArray(item.content)) {
+              for (const part of item.content) {
+                if (part.type === "output_text") rawText += part.text;
+              }
             }
           }
         }
+        console.log(`[Takeoff] Chunk ${i + 1} response length: ${rawText.length} chars`);
+        try { allPartialRaws.push(JSON.parse(rawText || "{}")); } catch { allPartialRaws.push({}); }
       }
     } finally {
       // Clean up uploaded files from OpenAI (fire-and-forget)
@@ -337,9 +353,29 @@ export async function performTakeoff(
       }
     }
 
-    let raw: any = {};
-    try { raw = JSON.parse(rawText || "{}"); } catch { raw = {}; }
-    return parseRawTakeoff(raw, products);
+    // Merge all partial results into one combined raw takeoff
+    const merged: any = {
+      projectName: allPartialRaws.find(r => r.projectName && r.projectName !== "Customer Takeoff")?.projectName || allPartialRaws[0]?.projectName || "Customer Takeoff",
+      notes: allPartialRaws.flatMap(r => r.notes || []),
+      standardRebar: allPartialRaws.flatMap(r => r.standardRebar || []),
+      fabRebar: allPartialRaws.flatMap(r => r.fabRebar || []),
+      otherMaterials: allPartialRaws.flatMap(r => r.otherMaterials || []),
+    };
+
+    // Consolidate duplicate bar sizes in standardRebar (sum totalLinearFt)
+    const rebarMap = new Map<string, { barSize: string; totalLinearFt: number; productName: string }>();
+    for (const sr of merged.standardRebar) {
+      const key = sr.barSize;
+      if (rebarMap.has(key)) {
+        rebarMap.get(key)!.totalLinearFt += parseFloat(sr.totalLinearFt) || 0;
+      } else {
+        rebarMap.set(key, { barSize: sr.barSize, totalLinearFt: parseFloat(sr.totalLinearFt) || 0, productName: sr.productName });
+      }
+    }
+    merged.standardRebar = Array.from(rebarMap.values());
+    console.log(`[Takeoff] Merged ${allPartialRaws.length} chunks → ${merged.standardRebar.length} rebar sizes, ${merged.fabRebar.length} fab items, ${merged.otherMaterials.length} other materials`);
+
+    return parseRawTakeoff(merged, products);
 
   } else {
     // ── Use Chat Completions API with image_url content parts ───────────────
