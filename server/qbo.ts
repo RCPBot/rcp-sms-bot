@@ -167,9 +167,10 @@ export async function lookupCustomerByPhone(phone: string): Promise<{
         };
       }
     }
+    console.log(`[QBO] lookupCustomerByPhone: checked ${customers.length} customers for ${phone}, no match found. Sample phones: ${customers.slice(0,3).map((c: any) => c.PrimaryPhone?.FreeFormNumber || 'none').join(', ')}`);
     return null;
-  } catch (err) {
-    console.error("[QBO] lookupCustomerByPhone failed:", err);
+  } catch (err: any) {
+    console.error(`[QBO] lookupCustomerByPhone failed for ${phone}:`, err?.message || err, err?.response?.data || '');
     return null;
   }
 }
