@@ -1193,6 +1193,12 @@ export function registerRoutes(httpServer: Server, app: Express) {
         }),
       });
 
+      if (!tokenRes.ok) {
+        const errText = await tokenRes.text();
+        console.error(`[QBO EXCHANGE] Token endpoint returned ${tokenRes.status}: ${errText}`);
+        return res.status(500).json({ ok: false, error: `Intuit token exchange failed: ${tokenRes.status} ${errText}` });
+      }
+
       const tokens = await tokenRes.json();
 
       console.log("[QBO EXCHANGE SUCCESS]");
@@ -1203,14 +1209,28 @@ export function registerRoutes(httpServer: Server, app: Express) {
       process.env.QBO_REALM_ID = realmId;
       if (tokens.refresh_token) {
         process.env.QBO_REFRESH_TOKEN = tokens.refresh_token;
-        storage.setSetting("qbo_refresh_token", tokens.refresh_token);
+        try {
+          console.log('[QBO] Saving refresh token to SQLite:', tokens.refresh_token.substring(0, 20));
+          storage.setSetting("qbo_refresh_token", tokens.refresh_token);
+          const verify = storage.getSetting("qbo_refresh_token");
+          console.log('[QBO] SQLite verify after save — stored token prefix:', verify ? verify.substring(0, 20) : '(null)');
+        } catch (dbErr: any) {
+          console.error('[QBO] FAILED to persist refresh token to SQLite:', dbErr?.message, dbErr?.stack);
+        }
         updateRailwayEnvVar("QBO_REFRESH_TOKEN", tokens.refresh_token).catch(console.error);
         updateRailwayEnvVar("QBO_REALM_ID", realmId).catch(console.error);
+
+        // Trigger a product sync now that we have a valid token
+        syncProducts()
+          .then(() => console.log('[QBO] Post-auth product sync complete'))
+          .catch(err => console.error('[QBO] Post-auth product sync failed:', err?.message));
+      } else {
+        console.error('[QBO EXCHANGE] No refresh_token in Intuit response:', JSON.stringify(tokens));
       }
 
       return res.json({ ok: true, realmId, refreshToken: tokens.refresh_token });
     } catch (err: any) {
-      console.error("[QBO EXCHANGE ERROR]", err);
+      console.error("[QBO EXCHANGE ERROR]", err?.stack || err);
       return res.status(500).json({ ok: false, error: err.message });
     }
   });
@@ -1239,6 +1259,12 @@ export function registerRoutes(httpServer: Server, app: Express) {
         }),
       });
 
+      if (!tokenRes.ok) {
+        const errText = await tokenRes.text();
+        console.error(`[QBO CALLBACK] Token endpoint returned ${tokenRes.status}: ${errText}`);
+        return res.status(500).send(`<h2>Token exchange failed</h2><pre>${tokenRes.status} ${errText}</pre>`);
+      }
+
       const tokens = await tokenRes.json();
 
       // Always log to Railway console so we can retrieve values even if page fails
@@ -1250,9 +1276,23 @@ export function registerRoutes(httpServer: Server, app: Express) {
       process.env.QBO_REALM_ID = realmId;
       if (tokens.refresh_token) {
         process.env.QBO_REFRESH_TOKEN = tokens.refresh_token;
-        storage.setSetting("qbo_refresh_token", tokens.refresh_token);
+        try {
+          console.log('[QBO] Saving refresh token to SQLite:', tokens.refresh_token.substring(0, 20));
+          storage.setSetting("qbo_refresh_token", tokens.refresh_token);
+          const verify = storage.getSetting("qbo_refresh_token");
+          console.log('[QBO] SQLite verify after save — stored token prefix:', verify ? verify.substring(0, 20) : '(null)');
+        } catch (dbErr: any) {
+          console.error('[QBO] FAILED to persist refresh token to SQLite:', dbErr?.message, dbErr?.stack);
+        }
         updateRailwayEnvVar("QBO_REFRESH_TOKEN", tokens.refresh_token).catch(console.error);
         updateRailwayEnvVar("QBO_REALM_ID", realmId).catch(console.error);
+
+        // Trigger a product sync now that we have a valid token
+        syncProducts()
+          .then(() => console.log('[QBO] Post-auth product sync complete'))
+          .catch(err => console.error('[QBO] Post-auth product sync failed:', err?.message));
+      } else {
+        console.error('[QBO CALLBACK] No refresh_token in Intuit response:', JSON.stringify(tokens));
       }
 
       res.send(`<!DOCTYPE html><html><head><title>QuickBooks Connected</title>
