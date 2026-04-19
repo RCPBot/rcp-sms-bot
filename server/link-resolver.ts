@@ -16,7 +16,15 @@ import * as http from "http";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { execFile } from "child_process";
+import { execFile, execSync } from "child_process";
+
+// Log pdftoppm path on startup so Railway logs confirm it's installed
+try {
+  const which = execSync("which pdftoppm 2>/dev/null || echo NOT_FOUND").toString().trim();
+  console.log(`[LinkResolver] pdftoppm path: ${which}`);
+} catch {
+  console.warn("[LinkResolver] pdftoppm not found on PATH");
+}
 
 // ── URL extraction ────────────────────────────────────────────────────────────
 const URL_REGEX = /https?:\/\/[^\s<>"]+/gi;

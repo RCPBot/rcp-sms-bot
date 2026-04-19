@@ -1,2 +1,3 @@
 [phases.setup]
-nixPkgs = ["poppler"]
+nixPkgs = ["poppler_utils"]
+aptPkgs = ["poppler-utils"]
