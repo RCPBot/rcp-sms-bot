@@ -605,7 +605,11 @@ export function registerRoutes(httpServer: Server, app: Express) {
       const takeoffResult = await performTakeoff(imageUrls, products);
 
       if (!takeoffResult.lineItems || takeoffResult.lineItems.length === 0) {
-        const errMsg = `I couldn't extract materials from those images. Make sure all pages are clear and in focus. Try resending or call us at 469-631-7730 for a manual quote.`;
+        const hasPdf = imageUrls.some(u => u.startsWith("pdf::"));
+        const errMsg = hasPdf
+          ? `I wasn't able to read enough detail from that PDF to build an estimate. For best results, share a Dropbox or Google Drive link instead of attaching the file directly — larger plan sets come through much clearer that way. Or call us at 469-631-7730 and we'll quote it manually.`
+          : `I couldn't extract materials from those images. Make sure all pages are clear and in focus. Try resending or call us at 469-631-7730 for a manual quote.`;
+        console.error(`[Takeoff] Zero line items — imageUrls: ${JSON.stringify(imageUrls.map(u => u.substring(0,80)))}`);
         storage.addMessage({ conversationId, direction: "outbound", body: errMsg });
         await sendSms(phone, errMsg);
         storage.updateConversation(conversationId, { stage: "ordering" });
