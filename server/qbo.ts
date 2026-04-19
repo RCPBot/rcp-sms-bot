@@ -247,7 +247,10 @@ export async function createInvoice(params: {
     });
   }
 
+  const docNumber = await getNextDocNumber("Invoice");
+
   const invoiceBody: Record<string, any> = {
+    ...(docNumber ? { DocNumber: docNumber } : {}),
     CustomerRef: { value: params.customerId },
     BillEmail: { Address: params.customerEmail },
     EmailStatus: "NeedToSend",
@@ -309,7 +312,10 @@ export async function createEstimate(params: {
     },
   }));
 
+  const docNumber = await getNextDocNumber("Estimate");
+
   const estimateBody: Record<string, any> = {
+    ...(docNumber ? { DocNumber: docNumber } : {}),
     CustomerRef: { value: params.customerId },
     BillEmail: { Address: params.customerEmail },
     EmailStatus: "NeedToSend",
@@ -347,6 +353,29 @@ export async function getEstimateStatus(estimateId: string): Promise<string> {
     return data?.Estimate?.TxnStatus || "Pending";
   } catch {
     return "Unknown";
+  }
+}
+
+// ── Get next sequential DocNumber for invoices or estimates ────────────────────
+async function getNextDocNumber(type: "Invoice" | "Estimate"): Promise<string> {
+  try {
+    const encoded = encodeURIComponent(
+      `SELECT DocNumber FROM ${type} ORDERBY DocNumber DESC MAXRESULTS 1`
+    );
+    const data = await qboGet(`/query?query=${encoded}`);
+    const items: any[] = data.QueryResponse?.[type] || [];
+    if (items.length === 0) return type === "Invoice" ? "1001" : "5001";
+    const last = items[0].DocNumber || "";
+    // Extract trailing numeric portion and increment
+    const match = last.match(/(\d+)$/);
+    if (!match) return type === "Invoice" ? "1001" : "5001";
+    const next = parseInt(match[1], 10) + 1;
+    // Preserve any non-numeric prefix (e.g. "INV-" → "INV-1002")
+    const prefix = last.slice(0, last.length - match[1].length);
+    return `${prefix}${next}`;
+  } catch (err) {
+    console.error(`[QBO] getNextDocNumber(${type}) failed:`, err);
+    return "";
   }
 }
 
