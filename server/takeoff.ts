@@ -535,7 +535,8 @@ function normalizeToNewSchema(c: any): {
       totalLF = parseFloat(sr.totalLinearFt) || 0;
       stickCount = Math.ceil(totalLF / stockLen);
     }
-    return { size: barSize, stockLengthFt: stockLen, cutLengthFt: stockLen, totalLinearFt: totalLF, stickCount, location: sr.location || "" };
+    const weightLb = sr.weightLb ?? Math.round(totalLF * (BAR_WEIGHT[normBar(barSize)] ?? 0.376) * 100) / 100;
+    return { size: barSize, stockLengthFt: stockLen, cutLengthFt: stockLen, totalLinearFt: totalLF, stickCount, location: sr.location || "", weightLb };
   });
   return { projectName, notes, fabricatedBars, stockBars, otherMaterials };
 }
@@ -668,8 +669,8 @@ function buildFromCutSheet(consolidated: any, products: Product[]): TakeoffResul
       qboItemId: fabProduct?.qboItemId || "FAB-1",
       name: "Fabrication-1",
       description: desc,
-      qty: fabLbForBilling,
-      unitPrice: 0.75,
+      qty: 1,
+      unitPrice: priceLbs,
       amount: priceLbs,
     });
   }
@@ -834,7 +835,7 @@ export async function performTakeoff(
 
     // ── Pass 2: consolidation (text only, no PDF needed) ─────────────────────
     const consolidated = await runConsolidationPass(client, chunkRaws);
-    console.log(`[Takeoff] Pass 2 complete — ${consolidated.standardRebar?.length || 0} straight bar size(s), ${consolidated.fabRebar?.length || 0} fab mark(s), ${consolidated.otherMaterials?.length || 0} other material(s)`);
+    console.log(`[Takeoff] Pass 2 — fab marks: ${consolidated.fabricatedBars?.length ?? consolidated.fabRebar?.length ?? 0}, stock groups: ${consolidated.stockBars?.length ?? consolidated.standardRebar?.length ?? 0}, other: ${consolidated.otherMaterials?.length ?? 0}`);
 
     return buildFromCutSheet(consolidated, products);
 

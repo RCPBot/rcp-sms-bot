@@ -718,8 +718,8 @@ export function registerRoutes(httpServer: Server, app: Express) {
         storage.updateConversation(conversationId, { stage: "ordering" });
         return;
       }
-      const top5 = pricedItems.slice(0, 5).map(i => `${i.qty > 1 ? i.qty + "x " : ""}${i.name}: $${i.amount.toFixed(2)}`).join("\n");
-      const moreCount = pricedItems.length > 5 ? `\n+ ${pricedItems.length - 5} more items` : "";
+      const top5 = pricedItems.map(i => `${i.qty > 1 ? i.qty + "x " : ""}${i.name}: $${i.amount.toFixed(2)}`).join("\n");
+      const moreCount = "";
       const fabCount = takeoffResult.fabItems.filter(f => !f.bendDescription.includes("stock length")).length;
       const fabNote = fabCount > 0 ? `\n${fabCount} custom fab item(s) @ $0.75/lb included.` : "";
       const tbdNote = unpricedItems.length > 0
