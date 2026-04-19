@@ -1031,7 +1031,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
       if (!clientId) return res.status(400).send("QBO_CLIENT_ID not set");
       const params = new URLSearchParams({
         client_id: clientId,
-        redirect_uri: `${(process.env.APP_URL || "http://localhost:5000").replace(/^(?!https?:\/\/)/, "https://")}/qbo-callback.html`,
+        redirect_uri: `${(process.env.APP_URL || "http://localhost:5000").replace(/^(?!https?:\/\/)/, "https://")}/api/qbo/callback`,
         response_type: "code",
         scope: "com.intuit.quickbooks.accounting",
         state: Math.random().toString(36).slice(2),
