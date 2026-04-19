@@ -1,8 +1,11 @@
 /**
  * AI Takeoff Engine
- * Reads plan page images with GPT-4o Vision and extracts a full material takeoff.
+ * Reads plan page images (or PDFs) with GPT-4o Vision and extracts a full material takeoff.
  * Returns line items matched to QBO products, fabrication cut-sheet items,
  * notes, and a project name.
+ *
+ * PDF inputs use the OpenAI Responses API with input_file (file_url) — no system binary needed.
+ * Image inputs use the Chat Completions API with image_url content parts.
  */
 import OpenAI from "openai";
 import type { Product, LineItem, FabItem } from "@shared/schema";
@@ -66,18 +69,15 @@ function calcStockBars(
   return { barsPerStock, stockBarsNeeded };
 }
 
-// ── Core takeoff function ────────────────────────────────────────────────────
-export async function performTakeoff(
-  imageUrls: string[],
-  products: Product[]
-): Promise<TakeoffResult> {
+// ── Build the system prompt ──────────────────────────────────────────────────
+function buildSystemPrompt(products: Product[]): string {
   const productList = products
     .map(p => `- "${p.name}"${p.description ? ": " + p.description : ""}`)
     .join("\n");
 
-  const systemPrompt = `You are an expert construction estimator specializing in rebar and concrete supply for Rebar Concrete Products (McKinney, TX).
+  return `You are an expert construction estimator specializing in rebar and concrete supply for Rebar Concrete Products (McKinney, TX).
 
-You will receive photos of a customer's plan set. Your job is to perform a COMPLETE material takeoff and return structured JSON.
+You will receive a customer's plan set (as images or a PDF). Your job is to perform a COMPLETE material takeoff and return structured JSON.
 
 RULES:
 1. Extract EVERY piece of rebar, vapor barrier, concrete chair, forming lumber, stakes, tie wire, and any other material visible in the plans.
@@ -108,36 +108,10 @@ Return ONLY valid JSON in exactly this format:
     {"name": "Vapor Barrier 10 mil", "qty": 500, "unit": "SF", "productName": "Vapor Barrier 10 mil"}
   ]
 }`;
+}
 
-  // Build vision message with all plan pages
-  const contentParts: OpenAI.Chat.ChatCompletionContentPart[] = [
-    {
-      type: "text",
-      text: `Here are ${imageUrls.length} page(s) of the customer's plan set. Please perform a complete material takeoff for rebar, vapor barrier, chairs, forming lumber, stakes, tie wire, and anything else that matches our product catalog. Be thorough — examine every page carefully.`,
-    },
-  ];
-  for (const url of imageUrls) {
-    contentParts.push({ type: "image_url", image_url: { url, detail: "high" } });
-  }
-
-  const response = await getClient().chat.completions.create({
-    model: "gpt-4o",
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: contentParts },
-    ],
-    response_format: { type: "json_object" },
-    max_tokens: 4000,
-    temperature: 0,
-  });
-
-  let raw: any = {};
-  try {
-    raw = JSON.parse(response.choices[0].message.content || "{}");
-  } catch {
-    raw = {};
-  }
-
+// ── Parse raw JSON into TakeoffResult ────────────────────────────────────────
+function parseRawTakeoff(raw: any, products: Product[]): TakeoffResult {
   const lineItems: LineItem[] = [];
   const fabItems: FabItem[] = [];
   const takeoffNotes: string[] = raw.notes || [];
@@ -235,4 +209,106 @@ Return ONLY valid JSON in exactly this format:
   }
 
   return { lineItems, fabItems, takeoffNotes, projectName };
+}
+
+// ── Core takeoff function ────────────────────────────────────────────────────
+// mediaItems: array of URL strings. PDF URLs are prefixed with "pdf::"
+export async function performTakeoff(
+  mediaItems: string[],
+  products: Product[]
+): Promise<TakeoffResult> {
+  const systemPrompt = buildSystemPrompt(products);
+
+  // Separate PDFs from images
+  const pdfUrls = mediaItems.filter(u => u.startsWith("pdf::")).map(u => u.slice(6));
+  const imageUrls = mediaItems.filter(u => !u.startsWith("pdf::") && !u.startsWith("__"));
+
+  if (pdfUrls.length > 0) {
+    // ── Use Responses API with input_file (PDF) ─────────────────────────────
+    console.log(`[Takeoff] Using Responses API for ${pdfUrls.length} PDF(s)`);
+    const client = getClient();
+
+    // Build input content parts: system text + each PDF file + instruction
+    const inputContent: any[] = [
+      {
+        type: "input_text",
+        text: systemPrompt,
+      },
+    ];
+
+    for (const pdfUrl of pdfUrls) {
+      inputContent.push({
+        type: "input_file",
+        file_url: pdfUrl,
+        filename: "plan.pdf",
+      });
+    }
+
+    inputContent.push({
+      type: "input_text",
+      text: `Here ${pdfUrls.length === 1 ? "is" : "are"} ${pdfUrls.length} PDF plan set(s). Please perform a complete material takeoff for rebar, vapor barrier, chairs, forming lumber, stakes, tie wire, and anything else that matches our product catalog. Be thorough — examine every page carefully.`,
+    });
+
+    const response = await client.responses.create({
+      model: "gpt-4o",
+      input: [
+        {
+          role: "user",
+          content: inputContent,
+        },
+      ],
+      text: { format: { type: "json_object" } },
+      max_output_tokens: 4000,
+      temperature: 0,
+    } as any);
+
+    // Extract text from response
+    let rawText = "";
+    const output = (response as any).output;
+    if (Array.isArray(output)) {
+      for (const item of output) {
+        if (item.type === "message" && Array.isArray(item.content)) {
+          for (const part of item.content) {
+            if (part.type === "output_text") rawText += part.text;
+          }
+        }
+      }
+    }
+
+    let raw: any = {};
+    try { raw = JSON.parse(rawText || "{}"); } catch { raw = {}; }
+    return parseRawTakeoff(raw, products);
+
+  } else {
+    // ── Use Chat Completions API with image_url content parts ───────────────
+    console.log(`[Takeoff] Using Chat Completions for ${imageUrls.length} image(s)`);
+    const contentParts: OpenAI.Chat.ChatCompletionContentPart[] = [
+      {
+        type: "text",
+        text: `Here are ${imageUrls.length} page(s) of the customer's plan set. Please perform a complete material takeoff for rebar, vapor barrier, chairs, forming lumber, stakes, tie wire, and anything else that matches our product catalog. Be thorough — examine every page carefully.`,
+      },
+    ];
+    for (const url of imageUrls) {
+      contentParts.push({ type: "image_url", image_url: { url, detail: "high" } });
+    }
+
+    const response = await getClient().chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: contentParts },
+      ],
+      response_format: { type: "json_object" },
+      max_tokens: 4000,
+      temperature: 0,
+    });
+
+    let raw: any = {};
+    try {
+      raw = JSON.parse(response.choices[0].message.content || "{}");
+    } catch {
+      raw = {};
+    }
+    return parseRawTakeoff(raw, products);
+  }
 }

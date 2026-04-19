@@ -49,6 +49,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
     // Resolve any links in the message body (Google Drive, Dropbox, direct PDFs, etc.)
     let linkResolveFailed = false;
+    const pdfUrls: string[] = []; // PDF URLs for OpenAI Files API
     if (cleanBody) {
       try {
         const resolved = await resolveLinksFromText(cleanBody);
@@ -56,8 +57,11 @@ export function registerRoutes(httpServer: Server, app: Express) {
           console.log(`[LinkResolver] Resolved ${resolved.resolvedCount} link(s) → ${resolved.imageUrls.length} image(s) from message`);
           mediaUrls.push(...resolved.imageUrls);
         }
+        if (resolved.pdfUrls.length > 0) {
+          console.log(`[LinkResolver] Resolved ${resolved.pdfUrls.length} PDF(s) from message`);
+          pdfUrls.push(...resolved.pdfUrls);
+        }
         if (resolved.failedCount > 0) {
-          console.warn(`[LinkResolver] ${resolved.failedCount} link(s) could not be resolved`);
           if (resolved.resolvedCount === 0) linkResolveFailed = true;
         }
       } catch (err: any) {
@@ -67,7 +71,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
     }
 
     // If a link was sent but we couldn't open it, notify the customer right away
-    if (linkResolveFailed && mediaUrls.length === 0) {
+    if (linkResolveFailed && mediaUrls.length === 0 && pdfUrls.length === 0) {
       const failMsg = `Sorry, we weren't able to open that link. Please try sending the file again, or call us at 469-631-7730 and we'll take care of it.`;
       try { await sendSms(cleanPhone, failMsg); } catch {}
       return;
@@ -102,13 +106,18 @@ export function registerRoutes(httpServer: Server, app: Express) {
         }
       }
 
-      // ── Persist any resolved images so they survive across messages ─────────
+      // ── Persist any resolved images/PDFs so they survive across messages ─────
       // (e.g. customer sends link before verified; we store it and use it later)
-      if (mediaUrls.length > 0) {
+      // PDFs stored with "pdf::" prefix to distinguish from image URLs
+      const newMedia = [
+        ...mediaUrls,
+        ...pdfUrls.map(u => `pdf::${u}`),
+      ];
+      if (newMedia.length > 0) {
         const existing: string[] = conv.pendingImagesJson ? JSON.parse(conv.pendingImagesJson) : [];
-        const merged = [...existing, ...mediaUrls];
+        const merged = [...existing, ...newMedia];
         conv = storage.updateConversation(conv.id, { pendingImagesJson: JSON.stringify(merged) });
-        console.log(`[Images] Stored ${mediaUrls.length} image(s) — total pending: ${merged.length}`);
+        console.log(`[Images] Stored ${mediaUrls.length} image(s) + ${pdfUrls.length} PDF(s) — total pending: ${merged.length}`);
       }
 
       // Save inbound message — always preserve the original text/link.
@@ -203,22 +212,26 @@ export function registerRoutes(httpServer: Server, app: Express) {
         return;
       }
 
-      // ── Helper: get all stored images for this conversation ─────────────────
+      // ── Helper: get all stored images + PDFs for this conversation ─────────
       const allImages = (): string[] => {
         const stored: string[] = conv.pendingImagesJson ? JSON.parse(conv.pendingImagesJson) : [];
-        // merge live mediaUrls (deduplicated)
+        // merge live mediaUrls + pdfUrls (deduplicated)
         const combined = [...stored];
         for (const u of mediaUrls) { if (!combined.includes(u)) combined.push(u); }
+        for (const u of pdfUrls) {
+          const prefixed = `pdf::${u}`;
+          if (!combined.includes(prefixed)) combined.push(prefixed);
+        }
         return combined;
       };
 
-      // ── Auto-detect plan set: 3+ images sent at once → run takeoff ──────────
-      if (mediaUrls.length >= 3 && conv.verified && conv.stage !== "takeoff_pending") {
+      // ── Auto-detect plan set: 3+ images OR any PDF sent → run takeoff ───────
+      if ((mediaUrls.length >= 3 || pdfUrls.length >= 1) && conv.verified && conv.stage !== "takeoff_pending") {
         await handlePlanTakeoff(conv.id, cleanPhone, allImages());
         return;
       }
 
-      // ── If stage is takeoff_pending, run takeoff with all stored images ──────
+      // ── If stage is takeoff_pending, run takeoff with all stored images/PDFs ─
       if (conv.stage === "takeoff_pending") {
         const imgs = allImages();
         if (imgs.length >= 1) {
@@ -302,8 +315,8 @@ export function registerRoutes(httpServer: Server, app: Express) {
       }
 
       // If stage is takeoff_pending and images arrived, run the takeoff
-      if (conv.stage === "takeoff_pending" && mediaUrls.length >= 1 && intent.type === "message") {
-        await handlePlanTakeoff(conv.id, cleanPhone, mediaUrls);
+      if (conv.stage === "takeoff_pending" && (mediaUrls.length >= 1 || pdfUrls.length >= 1) && intent.type === "message") {
+        await handlePlanTakeoff(conv.id, cleanPhone, allImages());
       }
 
     } catch (err) {

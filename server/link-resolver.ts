@@ -1,30 +1,18 @@
 /**
  * Link Resolver
- * Detects URLs in SMS message text and converts them into image URLs
- * that OpenAI Vision can read directly.
+ * Detects URLs in SMS message text and resolves them into image/PDF URLs
+ * that OpenAI can read directly.
  *
  * Supported sources:
  *  - Direct image URLs (.jpg, .jpeg, .png, .gif, .webp)
- *  - Direct PDF URLs → fetched, each page rendered to a base64 data URL
+ *  - Direct PDF URLs → returned as pdfUrls for OpenAI Files API (no system binary needed)
  *  - Google Drive share links → converted to direct download
  *  - Dropbox share links → converted to direct download
- *  - WeTransfer, OneDrive, Box — fetched as binary and converted
+ *  - WeTransfer, OneDrive, Box — detected by content type
  */
 
 import * as https from "https";
 import * as http from "http";
-import * as fs from "fs";
-import * as os from "os";
-import * as path from "path";
-import { execFile, execSync } from "child_process";
-
-// Log pdftoppm path on startup so Railway logs confirm it's installed
-try {
-  const which = execSync("which pdftoppm 2>/dev/null || echo NOT_FOUND").toString().trim();
-  console.log(`[LinkResolver] pdftoppm path: ${which}`);
-} catch {
-  console.warn("[LinkResolver] pdftoppm not found on PATH");
-}
 
 // ── URL extraction ────────────────────────────────────────────────────────────
 const URL_REGEX = /https?:\/\/[^\s<>"]+/gi;
@@ -111,74 +99,20 @@ async function getFinalUrlAndType(url: string): Promise<{ finalUrl: string; cont
   });
 }
 
-// ── Fetch binary and convert to base64 data URL ──────────────────────────────
-async function fetchAsBase64DataUrl(url: string, mimeType: string): Promise<string> {
-  const resp = await globalThis.fetch(url, {
-    headers: { "User-Agent": "RCPBot/1.0" },
-    redirect: "follow",
-  });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status} fetching ${url}`);
-  const arrayBuffer = await resp.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
-  return `data:${mimeType};base64,${buffer.toString("base64")}`;
-}
-
-// ── PDF → PNG images via pdftoppm ───────────────────────────────────────
-async function pdfToDataUrls(url: string): Promise<string[]> {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "rcp-pdf-"));
-  const pdfPath = path.join(tmpDir, "plan.pdf");
-
-  try {
-    // Fetch PDF to disk
-    const resp = await globalThis.fetch(url, {
-      headers: { "User-Agent": "RCPBot/1.0" },
-      redirect: "follow",
-    });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status} fetching PDF`);
-    const buf = Buffer.from(await resp.arrayBuffer());
-    fs.writeFileSync(pdfPath, buf);
-    console.log(`[LinkResolver] PDF downloaded: ${buf.length} bytes → ${pdfPath}`);
-
-    // Convert PDF pages to PNGs using pdftoppm (150 dpi — good balance of quality vs size)
-    const outPrefix = path.join(tmpDir, "page");
-    await new Promise<void>((resolve, reject) => {
-      execFile("pdftoppm", ["-png", "-r", "150", pdfPath, outPrefix], (err) => {
-        if (err) reject(err); else resolve();
-      });
-    });
-
-    // Read all generated page PNGs and convert to base64 data URLs
-    const pngFiles = fs.readdirSync(tmpDir)
-      .filter(f => f.endsWith(".png"))
-      .sort()
-      .map(f => path.join(tmpDir, f));
-
-    console.log(`[LinkResolver] PDF converted to ${pngFiles.length} page(s)`);
-
-    const dataUrls = pngFiles.map(f => {
-      const data = fs.readFileSync(f);
-      return `data:image/png;base64,${data.toString("base64")}`;
-    });
-
-    return dataUrls;
-  } finally {
-    // Clean up temp files
-    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
-  }
-}
-
 // ── Main resolver ─────────────────────────────────────────────────────────────
 export interface ResolvedMedia {
-  imageUrls: string[];   // ready-to-use URLs/data-URLs for OpenAI Vision
+  imageUrls: string[];   // ready-to-use URLs for OpenAI Vision (images)
+  pdfUrls: string[];     // direct PDF URLs for OpenAI Files API (no conversion needed)
   resolvedCount: number; // how many links were successfully resolved
   failedCount: number;
 }
 
 export async function resolveLinksFromText(text: string): Promise<ResolvedMedia> {
   const rawUrls = extractUrls(text);
-  if (rawUrls.length === 0) return { imageUrls: [], resolvedCount: 0, failedCount: 0 };
+  if (rawUrls.length === 0) return { imageUrls: [], pdfUrls: [], resolvedCount: 0, failedCount: 0 };
 
   const imageUrls: string[] = [];
+  const pdfUrls: string[] = [];
   let resolvedCount = 0;
   let failedCount = 0;
 
@@ -194,10 +128,10 @@ export async function resolveLinksFromText(text: string): Promise<ResolvedMedia>
         continue;
       }
 
-      // Direct PDF by extension
+      // Direct PDF by extension — pass URL directly to OpenAI Files API (no conversion)
       if (/\.pdf(\?.*)?$/.test(lower)) {
-        const pages = await pdfToDataUrls(normalized);
-        imageUrls.push(...pages);
+        console.log(`[LinkResolver] PDF URL resolved: ${normalized}`);
+        pdfUrls.push(normalized);
         resolvedCount++;
         continue;
       }
@@ -208,20 +142,11 @@ export async function resolveLinksFromText(text: string): Promise<ResolvedMedia>
       if (contentType.includes("image/")) {
         imageUrls.push(finalUrl);
         resolvedCount++;
-      } else if (contentType.includes("pdf")) {
-        const pages = await pdfToDataUrls(finalUrl);
-        imageUrls.push(...pages);
+      } else if (contentType.includes("pdf") || contentType.includes("octet-stream") || contentType === "") {
+        // PDF or binary blob — pass URL to OpenAI Files API
+        console.log(`[LinkResolver] PDF/binary URL resolved (content-type: ${contentType || "unknown"}): ${finalUrl}`);
+        pdfUrls.push(finalUrl);
         resolvedCount++;
-      } else if (contentType.includes("octet-stream") || contentType === "") {
-        // Binary blob — try treating as PDF base64
-        try {
-          const pages = await pdfToDataUrls(finalUrl);
-          imageUrls.push(...pages);
-          resolvedCount++;
-        } catch {
-          console.warn(`[LinkResolver] Could not decode binary from ${raw}`);
-          failedCount++;
-        }
       } else {
         console.warn(`[LinkResolver] Unsupported content type "${contentType}" for ${raw}`);
         failedCount++;
@@ -232,5 +157,9 @@ export async function resolveLinksFromText(text: string): Promise<ResolvedMedia>
     }
   }
 
-  return { imageUrls, resolvedCount, failedCount };
+  if (failedCount > 0) {
+    console.warn(`[LinkResolver] ${failedCount} link(s) could not be resolved`);
+  }
+
+  return { imageUrls, pdfUrls, resolvedCount, failedCount };
 }
