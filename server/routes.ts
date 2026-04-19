@@ -468,7 +468,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
     if (!conv) return;
 
     const msgs = storage.getMessages(conversationId);
-    const products = storage.getAllProducts();
+    const products = storage.getAllProducts().filter(p => p.unitPrice !== null).slice(0, 80);
 
     try {
       // Extract order details

@@ -17,6 +17,23 @@ function getClient(): OpenAI {
   return _client;
 }
 
+async function callWithRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      if (err?.status === 429 && i < maxRetries - 1) {
+        const retryAfterMs = (parseInt(err?.headers?.['retry-after'] || '1', 10) + 1) * 1000;
+        console.log(`[OpenAI] Rate limit hit, retrying in ${retryAfterMs}ms...`);
+        await new Promise(r => setTimeout(r, retryAfterMs));
+      } else {
+        throw err;
+      }
+    }
+  }
+  throw new Error('Max retries exceeded');
+}
+
 function buildSystemPrompt(products: Product[], conv: Conversation): string {
   const productList = products.length > 0
     ? products.map(p =>
@@ -585,13 +602,13 @@ Return JSON in this exact format:
 Only include items the customer explicitly confirmed. If a product isn't in the list, use qboItemId "CUSTOM".
 Do NOT include delivery fee as a line item — the system adds it automatically from the stored delivery calculation.`;
 
-  const response = await getClient().chat.completions.create({
+  const response = await callWithRetry(() => getClient().chat.completions.create({
     model: "gpt-4o",
     messages: [{ role: "user", content: prompt }],
     response_format: { type: "json_object" },
     max_tokens: 800,
     temperature: 0,
-  });
+  }));
 
   try {
     return JSON.parse(response.choices[0].message.content || "{}");
