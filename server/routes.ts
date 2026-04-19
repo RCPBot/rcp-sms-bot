@@ -16,6 +16,8 @@ import * as os from "os";
 const OWNER_EMAIL = "maddoxconstruction1987@gmail.com";
 const TAX_RATE = 0.0825; // McKinney, TX: 8.25% combined sales tax
 
+const orderConfirmationInProgress = new Set<number>();
+
 // Sync QBO products on startup, then every 30 minutes
 async function startProductSync() {
   if (isQboConfigured()) {
@@ -466,6 +468,17 @@ export function registerRoutes(httpServer: Server, app: Express) {
   async function handleOrderConfirmation(conversationId: number, phone: string) {
     const conv = storage.getConversation(conversationId);
     if (!conv) return;
+    // Guard: prevent duplicate invoice creation if already processing or done
+    if (conv.stage === "invoice_review" || conv.stage === "invoiced") {
+      console.log(`[Order] Skipping handleOrderConfirmation — already in stage: ${conv.stage}`);
+      return;
+    }
+    if (orderConfirmationInProgress.has(conversationId)) {
+      console.log(`[Order] Skipping — order confirmation already in progress for conv ${conversationId}`);
+      return;
+    }
+    orderConfirmationInProgress.add(conversationId);
+    try {
 
     const msgs = storage.getMessages(conversationId);
     const products = storage.getAllProducts().filter(p => p.unitPrice !== null).slice(0, 80);
@@ -632,6 +645,9 @@ export function registerRoutes(httpServer: Server, app: Express) {
       const orderErrMsg = `We had trouble creating your invoice. Please try again in a moment or call us at 469-631-7730 and we'll get it sorted out.`;
       storage.addMessage({ conversationId, direction: "outbound", body: orderErrMsg });
       try { await sendSms(phone, orderErrMsg); } catch {}
+    }
+    } finally {
+      orderConfirmationInProgress.delete(conversationId);
     }
   }
 

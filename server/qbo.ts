@@ -514,15 +514,16 @@ async function getNextDocNumber(type: "Invoice" | "Estimate"): Promise<string> {
   try {
     const result = await Promise.race([
       (async () => {
+        // Strategy: fetch the 500 most recently updated docs — highest numbers will be among them
+        // This avoids scanning all 2000+ invoices which takes 22+ seconds
         let maxNum = 0;
         let startPos = 1;
         const pageSize = 100;
-        let page = 0;
-        while (true) {
-          page++;
+        const maxPages = 5; // only scan 500 most-recent
+        for (let page = 1; page <= maxPages; page++) {
           console.log(`[QBO] getNextDocNumber(${type}) page ${page} startPos=${startPos}`);
           const query = encodeURIComponent(
-            `SELECT DocNumber FROM ${type} STARTPOSITION ${startPos} MAXRESULTS ${pageSize}`
+            `SELECT DocNumber FROM ${type} ORDERBY MetaData.LastUpdatedTime DESC STARTPOSITION ${startPos} MAXRESULTS ${pageSize}`
           );
           const data = await qboGet(`/query?query=${query}`);
           const items: any[] = data.QueryResponse?.[type] || [];
@@ -534,19 +535,15 @@ async function getNextDocNumber(type: "Invoice" | "Estimate"): Promise<string> {
               if (n > maxNum) maxNum = n;
             }
           }
-          if (items.length < pageSize) break;
+          if (items.length < pageSize) break; // last page
           startPos += pageSize;
-          if (page > 20) {
-            console.warn(`[QBO] getNextDocNumber(${type}): exceeded 20 pages, stopping`);
-            break;
-          }
         }
         const next = maxNum > 0 ? String(maxNum + 1) : fallback;
         console.log(`[QBO] getNextDocNumber(${type}): maxNum=${maxNum}, next=${next}`);
         return next;
       })(),
       new Promise<string>((_, reject) =>
-        setTimeout(() => reject(new Error(`getNextDocNumber(${type}) timed out after 15s`)), 15000)
+        setTimeout(() => reject(new Error(`getNextDocNumber(${type}) timed out after 20s`)), 20000)
       ),
     ]);
     return result;
