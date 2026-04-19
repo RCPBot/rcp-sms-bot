@@ -121,6 +121,64 @@ export function registerRoutes(httpServer: Server, app: Express) {
         return;
       }
 
+      // ── Shortcut: LOOKS GOOD — customer confirms invoice, send payment link ───
+      if (conv.stage === "invoice_review") {
+        const LOOKS_GOOD = /^(looks? good|confirmed?|correct|yes|yep|yeah|ok|okay|approve[d]?|good|perfect|that'?s? (correct|right|good))[\.!]?$/i;
+        const CORRECTION = /^(correction|wrong|no|change|fix|incorrect|mistake|error)s?[\.!]?$/i;
+
+        if (LOOKS_GOOD.test(cleanBody.trim())) {
+          // Retrieve stored payment data
+          let paymentLink: string | null = null;
+          let invoiceNumber = "";
+          let total = 0;
+          let taxAmount = 0;
+          let subtotal = 0;
+          let deliveryFee = 0;
+          try {
+            const stored = JSON.parse(conv.pendingImagesJson || "{}");
+            paymentLink = stored.__paymentLink || null;
+            invoiceNumber = stored.__invoiceNumber || "";
+            total = stored.__total || 0;
+            taxAmount = stored.__taxAmount || 0;
+            subtotal = stored.__subtotal || 0;
+            deliveryFee = stored.__deliveryFee || 0;
+          } catch {}
+
+          storage.updateConversation(conv.id, { stage: "invoiced", status: "completed", pendingImagesJson: null });
+
+          const dLine = deliveryFee > 0 ? `\nDelivery: $${deliveryFee.toFixed(2)}` : "";
+          const payMsg = paymentLink
+            ? `Great! Here is your payment link for Invoice #${invoiceNumber}:\n\n${paymentLink}\n\nSubtotal: $${subtotal.toFixed(2)}\nTax (8.25%): $${taxAmount.toFixed(2)}${dLine}\nTotal: $${total.toFixed(2)}\n\nWe'll also email the invoice to ${conv.customerEmail}. Thank you!`
+            : `Thank you for confirming! Invoice #${invoiceNumber} has been emailed to ${conv.customerEmail}. Total: $${total.toFixed(2)}. Call us at 469-631-7730 with any questions.`;
+
+          storage.addMessage({ conversationId: conv.id, direction: "outbound", body: payMsg });
+          let smsSent = false;
+          try { await sendSms(cleanPhone, payMsg); smsSent = true; } catch (e: any) {
+            console.error(`[SMS] Failed to send payment link: ${e?.message}`);
+          }
+          if (!smsSent && paymentLink && conv.customerEmail) {
+            try {
+              await sendPaymentLinkEmail({
+                to: conv.customerEmail,
+                customerName: conv.customerName || "Valued Customer",
+                invoiceNumber,
+                total,
+                paymentLink,
+              });
+            } catch {}
+          }
+          return;
+        }
+
+        if (CORRECTION.test(cleanBody.trim())) {
+          const corrMsg = `No problem! Please describe what needs to be corrected and we'll update the invoice for you. You can also call us at 469-631-7730.`;
+          storage.updateConversation(conv.id, { stage: "ordering" });
+          storage.addMessage({ conversationId: conv.id, direction: "outbound", body: corrMsg });
+          try { await sendSms(cleanPhone, corrMsg); } catch {}
+          return;
+        }
+      }
+
       // ── Shortcut: APPROVE keyword from customer ────────────────────────────
       if (conv.stage === "estimating" && cleanBody.trim().toUpperCase() === "APPROVE") {
         const est = storage.getEstimateByConversation(conv.id);
@@ -362,44 +420,37 @@ export function registerRoutes(httpServer: Server, app: Express) {
         status: invoiceId ? "invoiced" : "pending",
       });
 
-      // Format and send confirmation
-      const itemList = orderData.lineItems
-        .map(i => `${i.qty}x ${i.name} = $${i.amount.toFixed(2)}`)
-        .join(", ");
-
+      // ── Send invoice review — ask customer to confirm before payment link ──────
       const freeDeliveryNote = qualifiesFreeDelivery ? " Free delivery applied!" : "";
-
       const deliveryLine = deliveryFee > 0 ? `\nDelivery: $${deliveryFee.toFixed(2)}` : "";
-      const smsBody = paymentLink
-        ? `Invoice #${invoiceNumber} created!${freeDeliveryNote}\n\nSubtotal: $${subtotal.toFixed(2)}\nTax (8.25%): $${taxAmount.toFixed(2)}${deliveryLine}\nTotal: $${total.toFixed(2)}\n\nPay here: ${paymentLink}\n\nWe'll also email the invoice to ${conv.customerEmail}.`
-        : invoiceId
-        ? `Invoice #${invoiceNumber} created.${freeDeliveryNote}\n\nSubtotal: $${subtotal.toFixed(2)}\nTax (8.25%): $${taxAmount.toFixed(2)}${deliveryLine}\nTotal: $${total.toFixed(2)}\n\nWe emailed it to ${conv.customerEmail}. Thank you!`
-        : `Order confirmed.${freeDeliveryNote}\n\nSubtotal: $${subtotal.toFixed(2)}\nTax (8.25%): $${taxAmount.toFixed(2)}\nTotal: $${total.toFixed(2)}\n\nOur team will follow up shortly with your invoice. Thank you!`;
 
-      let smsSent = false;
-      try {
-        await sendSms(phone, smsBody);
-        smsSent = true;
-      } catch (smsErr: any) {
-        console.error(`[SMS] Failed to send confirmation to ${phone} — falling back to email. Error: ${smsErr?.message}`);
+      // Build line-by-line item list
+      const itemLines = orderData.lineItems
+        .map(i => `  • ${i.qty > 1 ? i.qty + "x " : ""}${i.name}: $${i.amount.toFixed(2)}`)
+        .join("\n");
+
+      const reviewMsg = [
+        `Invoice #${invoiceNumber} is ready.${freeDeliveryNote}`,
+        ``,
+        itemLines,
+        ``,
+        `Subtotal: $${subtotal.toFixed(2)}`,
+        `Tax (8.25%): $${taxAmount.toFixed(2)}`,
+        deliveryFee > 0 ? `Delivery: $${deliveryFee.toFixed(2)}` : null,
+        `Total: $${total.toFixed(2)}`,
+        ``,
+        `Reply LOOKS GOOD to receive your payment link, or CORRECTION if anything needs to be changed.`,
+      ].filter(l => l !== null).join("\n");
+
+      // Store payment link in conversation for retrieval after customer confirms
+      storage.updateConversation(conversationId, {
+        stage: "invoice_review",
+        pendingImagesJson: JSON.stringify({ __paymentLink: paymentLink, __invoiceNumber: invoiceNumber, __total: total, __taxAmount: taxAmount, __subtotal: subtotal, __deliveryFee: deliveryFee }),
+      });
+
+      try { await sendSms(phone, reviewMsg); } catch (e: any) {
+        console.error(`[SMS] Failed to send invoice review: ${e?.message}`);
       }
-
-      // Email fallback: if SMS failed and we have a payment link + customer email, send it via email
-      if (!smsSent && paymentLink && conv.customerEmail && invoiceId) {
-        try {
-          await sendPaymentLinkEmail({
-            to: conv.customerEmail,
-            customerName: conv.customerName || "Valued Customer",
-            invoiceNumber,
-            total,
-            paymentLink,
-          });
-        } catch (emailErr: any) {
-          console.error(`[Email] Payment link fallback also failed: ${emailErr?.message}`);
-        }
-      }
-
-      storage.updateConversation(conversationId, { status: "completed", stage: "invoiced" });
 
     } catch (err) {
       console.error("[Order] Failed to create invoice:", err);
