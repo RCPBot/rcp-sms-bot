@@ -83,6 +83,35 @@ async function qboPost(path: string, body: object) {
   return res.json();
 }
 
+// Post with automatic DocNumber retry on duplicate (QBO error code 6140)
+async function qboPostWithDocRetry(path: string, body: Record<string, any>): Promise<any> {
+  const MAX_RETRIES = 5;
+  let attempt = 0;
+  let currentDoc: string = body.DocNumber || "";
+
+  while (attempt < MAX_RETRIES) {
+    try {
+      return await qboPost(path, { ...body, ...(currentDoc ? { DocNumber: currentDoc } : {}) });
+    } catch (err: any) {
+      const isDupe = err?.message?.includes("6140") || err?.message?.includes("Duplicate Document Number");
+      if (isDupe && currentDoc) {
+        // Increment the DocNumber and retry
+        const match = currentDoc.match(/(\d+)$/);
+        if (match) {
+          const next = parseInt(match[1], 10) + 1;
+          const prefix = currentDoc.slice(0, currentDoc.length - match[1].length);
+          currentDoc = `${prefix}${next}`;
+          console.warn(`[QBO] Duplicate DocNumber, retrying with ${currentDoc}`);
+          attempt++;
+          continue;
+        }
+      }
+      throw err;
+    }
+  }
+  throw new Error(`[QBO] Could not find unique DocNumber after ${MAX_RETRIES} retries`);
+}
+
 // ── Sync products/services from QBO ──────────────────────────────────────────
 export async function syncProducts(): Promise<void> {
   try {
@@ -265,7 +294,7 @@ export async function createInvoice(params: {
     invoiceBody.ShipAddr = { Line1: params.deliveryAddress };
   }
 
-  const data = await qboPost("/invoice", invoiceBody);
+  const data = await qboPostWithDocRetry("/invoice", invoiceBody);
   const invoice = data.Invoice;
 
   // Get the InvoiceLink (QBO Payments pay link)
@@ -327,7 +356,7 @@ export async function createEstimate(params: {
   if (params.customerMemo) estimateBody.CustomerMemo = { value: params.customerMemo };
   if (params.deliveryAddress) estimateBody.ShipAddr = { Line1: params.deliveryAddress };
 
-  const data = await qboPost("/estimate", estimateBody);
+  const data = await qboPostWithDocRetry("/estimate", estimateBody);
   const estimate = data.Estimate;
 
   // Try to get the shareable estimate link

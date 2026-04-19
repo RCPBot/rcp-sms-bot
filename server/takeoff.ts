@@ -224,6 +224,8 @@ RULES:
 - For poly/vapor barrier: always include mil thickness AND roll dimensions in the name (e.g. "6 mil poly 32x100"). Include quantity in SF if given, otherwise as rolls.
 - For chairs/dobies: list as EA with exact count if shown, or estimate from slab area at 1 chair per 16 SF.
 - For dobie bricks (concrete block chairs): list as "dobie brick" with count.
+- NEVER return null for qty or cutLengthFt. If you cannot determine an exact count, make your best estimate based on slab dimensions and note it as approximate. A rough number is better than null.
+- For beam bars where qty cannot be counted (typical details repeated across a slab), estimate total linear feet based on the slab perimeter/interior beam layout visible on the plan.
 - Include the page number or sheet name in notes if visible.
 
 Return ONLY valid JSON:
@@ -421,9 +423,15 @@ function buildFromCutSheet(consolidated: any, products: Product[]): TakeoffResul
 
   // ── Fabricated rebar ──────────────────────────────────────────────────────
   for (const fr of (consolidated.fabRebar || [])) {
+    if (!fr.barSize) continue; // skip malformed entries
     const barSize: string = fr.barSize || "#4";
-    const qty: number = parseInt(fr.qty) || 1;
-    const cutLengthFt: number = parseFloat(fr.cutLengthFt) || 2;
+    const qty: number = parseInt(fr.qty) || 0;
+    const cutLengthFt: number = parseFloat(fr.cutLengthFt) || 0;
+    if (qty === 0 || cutLengthFt === 0) {
+      // Can't price without qty and length — add as a CUSTOM note item
+      lineItems.push({ qboItemId: "CUSTOM", name: `${barSize} fab bar (${fr.mark || fr.bendDescription || "see plans"})`, description: `Qty/length TBD — verify from plans`, qty: 0, unitPrice: 0.75, amount: 0 });
+      continue;
+    }
     const weightPerFt = BAR_WEIGHT[barSize] ?? 0.668;
     const totalLF = qty * cutLengthFt;
     const totalWeight = Math.round(totalLF * weightPerFt * 100) / 100;
