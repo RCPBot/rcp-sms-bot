@@ -163,27 +163,38 @@ function isChair(name: string): boolean {
 const PASS1_PROMPT = `You are a structural rebar detailer reading construction plan pages.
 Your ONLY job is to find and list every rebar item and material shown on these pages.
 
+PLAN TYPES — read ALL of these carefully:
+1. REBAR SHOP DRAWINGS: Named bar marks (B1, S1, T1, etc.) with size, qty, cut length.
+2. FOUNDATION PLANS (post-tension or conventional): Read the PLAN LEGEND, GENERAL NOTES, and all callout bubbles. The legend explains what numbers/symbols mean. Numbered circles on plan view are strand or rebar counts.
+3. BEAM/PIER DETAIL SHEETS: Read every section detail for rebar callouts ("#4 bars cont.", "2-#3 bars vertical", "#3 @ 16" loops", etc.). Read any PIER REINFORCING SCHEDULE table.
+4. SLAB PLANS: Look for slab reinforcing notes, chair spacing callouts, and poly/vapor barrier area.
+
 RULES:
-- List EVERY bar mark (B1, S1, T1, etc.) with its size, quantity, cut length, and bend description.
-- For straight stock bars (no bends): list under "straightBars" with barSize and totalLinearFt shown on these pages.
-- For fabricated/bent bars: list under "fabBars" — include mark, barSize, qty (piece count), cutLengthFt, and bendDescription.
-- For other materials (vapor barrier, chairs, tie wire, forming lumber, stakes, nails): list under "otherMaterials".
-- Do NOT consolidate or total across pages. Report exactly what you see on each page.
-- If a bar mark appears multiple times on these pages, list each occurrence separately.
+- List EVERY named bar mark (B1, S1, T1, etc.) with its size, quantity, cut length, and bend description.
+- For straight stock bars (no bends): list under "straightBars" with barSize and totalLinearFt.
+- For fabricated/bent bars (hooks, stirrups, ties, dowels): list under "fabBars" — include mark (or description if no mark), barSize, qty (piece count), cutLengthFt, and bendDescription.
+- For foundation plans: read beam detail callouts and pier schedules. Each beam type shown in a detail is typically repeated many times on the plan — extract the rebar per beam type and note the beam type.
+- For pier schedules: list each pier diameter with its vertical bars and tie/loop bar as separate fabBars entries.
+- For other materials (vapor barrier, poly, chairs, tie wire, stakes): list under "otherMaterials".
+- CONCRETE CHAIRS: if callout says "chairs 4'-0" O.C.W." and a slab area is visible, estimate total chairs from the slab square footage.
+- Do NOT skip a page just because it has no formal rebar schedule — read ALL notes and details.
+- Do NOT list post-tension STRANDS as rebar (strands are not our product). DO list conventional deformed bars.
 - Include the page number or sheet name in notes if visible.
-- If a page has no rebar information (title page, civil drawings, etc.), note it but still return valid JSON.
 
 Return ONLY valid JSON:
 {
   "projectName": "name if visible on these pages, else null",
-  "notes": ["sheet S1.0 — foundation plan", ...],
+  "notes": ["sheet F1 — foundation plan", "post-tension slab with conventional rebar in beams and piers"],
   "straightBars": [
-    {"barSize": "#5", "totalLinearFt": 120, "location": "slab on grade"}
+    {"barSize": "#5", "totalLinearFt": 120, "location": "beam top and bottom"}
   ],
   "fabBars": [
-    {"mark": "B1", "barSize": "#4", "qty": 24, "cutLengthFt": 5.5, "bendDescription": "90-deg hook both ends, 4in legs"}
+    {"mark": "B1", "barSize": "#4", "qty": 24, "cutLengthFt": 5.5, "bendDescription": "90-deg hook both ends, 4in legs"},
+    {"mark": "PIER-12IN-VERT", "barSize": "#6", "qty": 6, "cutLengthFt": 10, "bendDescription": "straight vertical, 12in pier"},
+    {"mark": "PIER-12IN-LOOP", "barSize": "#3", "qty": 20, "cutLengthFt": 3.5, "bendDescription": "closed loop tie @ 16in spacing"}
   ],
   "otherMaterials": [
+    {"name": "concrete chairs", "qty": 500, "unit": "EA"},
     {"name": "10 mil poly", "qty": 2000, "unit": "SF"}
   ]
 }`;
@@ -473,6 +484,7 @@ export async function performTakeoff(
         `[Takeoff] Pass 1 chunk ${i + 1}/${readyChunks.length}`
       );
       console.log(`[Takeoff] Pass 1 chunk ${i + 1} response: ${rawText.length} chars`);
+      console.log(`[Takeoff] Pass 1 chunk ${i + 1} raw: ${rawText.substring(0, 500)}`);
       try { chunkRaws.push(JSON.parse(rawText || "{}")); } catch { chunkRaws.push({}); }
     }
 
