@@ -146,16 +146,58 @@ function calcStockBars(
 }
 
 // ── Unit conversion helpers ───────────────────────────────────────────────────
-const VAPOR_BARRIER_SF_PER_ROLL = 2000; // 20x100 roll
 const CHAIRS_PER_BAG = 500;
 
 function isVaporBarrier(name: string): boolean {
   const l = name.toLowerCase();
-  return l.includes("vapor") || l.includes("poly") || l.includes("visqueen") || l.includes("10 mil") || l.includes("10mil");
+  return l.includes("vapor") || l.includes("poly") || l.includes("visqueen") || l.includes(" mil");
 }
 function isChair(name: string): boolean {
   const l = name.toLowerCase();
-  return l.includes("chair") || l.includes("slab bolster") || l.includes("bar chair");
+  return l.includes("chair") || l.includes("dobie") || l.includes("slab bolster") || l.includes("bar chair");
+}
+
+// Parse poly mil thickness and roll size from a material name like "6 mil poly 32x100" or "10mil"
+// Returns the best-matching QBO product name fragment to search for
+function matchPolyProduct(matName: string, qty: number, products: Product[]): LineItem | null {
+  const l = matName.toLowerCase();
+
+  // Detect mil thickness
+  let mil = 10; // default
+  const milMatch = l.match(/(\d+)\s*mil/);
+  if (milMatch) mil = parseInt(milMatch[1]);
+
+  // Detect roll width (32 or 20)
+  let width = 20; // default
+  if (l.includes("32")) width = 32;
+
+  // Build search fragment: e.g. "Poly 6 Mil 32x100"
+  const fragment = `poly ${mil} mil ${width}x`;
+  const best = products.find(p => p.name.toLowerCase().includes(fragment));
+  if (best) {
+    return {
+      qboItemId: best.qboItemId,
+      name: best.name,
+      qty,
+      unitPrice: best.unitPrice ?? 0,
+      amount: Math.round(qty * (best.unitPrice ?? 0) * 100) / 100,
+    };
+  }
+
+  // Fallback: just match by mil thickness
+  const milFragment = `poly ${mil} mil`;
+  const fallback = products.find(p => p.name.toLowerCase().includes(milFragment));
+  if (fallback) {
+    return {
+      qboItemId: fallback.qboItemId,
+      name: fallback.name,
+      qty,
+      unitPrice: fallback.unitPrice ?? 0,
+      amount: Math.round(qty * (fallback.unitPrice ?? 0) * 100) / 100,
+    };
+  }
+
+  return null;
 }
 
 // ── Pass 1 prompt: raw extraction per chunk ───────────────────────────────────
@@ -171,7 +213,7 @@ PLAN TYPES — read ALL of these carefully:
 
 RULES:
 - List EVERY named bar mark (B1, S1, T1, etc.) with its size, quantity, cut length, and bend description.
-- For straight stock bars (no bends): list under "straightBars" with barSize and totalLinearFt.
+- For straight stock bars (no bends, 20' lengths): list under "straightBars" with barSize AND either "totalLinearFt" (if LF is stated) OR "qty" (piece count, if the plan calls out a specific number of bars like "25 pcs #3 20'"). Use whichever the plan explicitly shows.
 - For fabricated/bent bars (hooks, stirrups, ties, dowels): list under "fabBars" — include mark (or description if no mark), barSize, qty (piece count), cutLengthFt, and bendDescription.
 - For foundation plans: read beam detail callouts and pier schedules. Each beam type shown in a detail is typically repeated many times on the plan — extract the rebar per beam type and note the beam type.
 - For pier schedules: list each pier diameter with its vertical bars and tie/loop bar as separate fabBars entries.
@@ -179,6 +221,9 @@ RULES:
 - CONCRETE CHAIRS: if callout says "chairs 4'-0" O.C.W." and a slab area is visible, estimate total chairs from the slab square footage.
 - Do NOT skip a page just because it has no formal rebar schedule — read ALL notes and details.
 - Do NOT list post-tension STRANDS as rebar (strands are not our product). DO list conventional deformed bars.
+- For poly/vapor barrier: always include mil thickness AND roll dimensions in the name (e.g. "6 mil poly 32x100"). Include quantity in SF if given, otherwise as rolls.
+- For chairs/dobies: list as EA with exact count if shown, or estimate from slab area at 1 chair per 16 SF.
+- For dobie bricks (concrete block chairs): list as "dobie brick" with count.
 - Include the page number or sheet name in notes if visible.
 
 Return ONLY valid JSON:
@@ -186,7 +231,9 @@ Return ONLY valid JSON:
   "projectName": "name if visible on these pages, else null",
   "notes": ["sheet F1 — foundation plan", "post-tension slab with conventional rebar in beams and piers"],
   "straightBars": [
-    {"barSize": "#5", "totalLinearFt": 120, "location": "beam top and bottom"}
+    {"barSize": "#5", "totalLinearFt": 120, "location": "beam top and bottom"},
+    {"barSize": "#3", "qty": 25, "location": "corner bars per general notes"},
+    {"barSize": "#4", "qty": 15, "location": "beam continuous bars"}
   ],
   "fabBars": [
     {"mark": "B1", "barSize": "#4", "qty": 24, "cutLengthFt": 5.5, "bendDescription": "90-deg hook both ends, 4in legs"},
@@ -195,7 +242,9 @@ Return ONLY valid JSON:
   ],
   "otherMaterials": [
     {"name": "concrete chairs", "qty": 500, "unit": "EA"},
-    {"name": "10 mil poly", "qty": 2000, "unit": "SF"}
+    {"name": "6 mil poly 32x100", "qty": 3200, "unit": "SF"},
+    {"name": "concrete chair", "qty": 500, "unit": "EA"},
+    {"name": "dobie brick", "qty": 24, "unit": "EA"}
   ]
 }`;
 
@@ -216,18 +265,21 @@ ${chunkDataJson}
 
 BAR WEIGHTS (lb/ft): #3=0.376, #4=0.668, #5=1.043, #6=1.502, #7=2.044, #8=2.670, #9=3.400, #10=4.303, #11=5.313
 
+For standardRebar: use "totalLinearFt" when you have linear feet, OR use "qty" when the plan shows a piece count (e.g. "25 pcs #3 20'"). Do NOT convert — pass through exactly what the plan states.
+
 Return ONLY valid JSON in this exact format:
 {
   "projectName": "Ascension Cottages",
   "notes": ["summary notes about the plan set"],
   "standardRebar": [
-    {"barSize": "#5", "totalLinearFt": 840}
+    {"barSize": "#5", "totalLinearFt": 840},
+    {"barSize": "#3", "qty": 25}
   ],
   "fabRebar": [
     {"mark": "B1", "barSize": "#4", "qty": 48, "cutLengthFt": 5.5, "bendDescription": "90-deg hook both ends, 4in legs"}
   ],
   "otherMaterials": [
-    {"name": "10 mil poly", "qty": 4000, "unit": "SF"}
+    {"name": "6 mil poly 32x100", "qty": 4000, "unit": "SF"}
   ]
 }`;
 }
@@ -334,12 +386,23 @@ function buildFromCutSheet(consolidated: any, products: Product[]): TakeoffResul
   // ── Standard (straight stock) rebar ──────────────────────────────────────
   for (const sr of (consolidated.standardRebar || [])) {
     const barSize: string = sr.barSize || "#4";
-    const totalLF: number = parseFloat(sr.totalLinearFt) || 0;
     const stockLen = 20;
-    const stockBarsNeeded = Math.ceil(totalLF / stockLen);
     const weightPerFt = BAR_WEIGHT[barSize] ?? 0.668;
+
+    // GPT may return totalLinearFt (LF) OR qty (pieces) OR both
+    let stockBarsNeeded: number;
+    let totalLF: number;
+    if (sr.qty && !sr.totalLinearFt) {
+      // Plan showed piece count directly (e.g. "25 pcs #3 20'")
+      stockBarsNeeded = parseInt(sr.qty) || 1;
+      totalLF = stockBarsNeeded * stockLen;
+    } else {
+      totalLF = parseFloat(sr.totalLinearFt) || 0;
+      stockBarsNeeded = Math.ceil(totalLF / stockLen);
+    }
+
     const totalWeight = Math.round(totalLF * weightPerFt * 100) / 100;
-    const desc = `${barSize} • ${totalLF} LF total • ${stockBarsNeeded} bars @ 20' • ${totalWeight} lbs`;
+    const desc = `${barSize} - ${stockBarsNeeded} bars @ 20' - ${totalLF} LF total - ${totalWeight} lbs`;
 
     const matched = matchProduct(sr.productName || barSize, stockBarsNeeded, "EA", products);
     if (matched) {
@@ -351,8 +414,8 @@ function buildFromCutSheet(consolidated: any, products: Product[]): TakeoffResul
       mark: `S-${barSize.replace("#", "")}`,
       barSize, qty: stockBarsNeeded, lengthFt: stockLen,
       totalLF: stockBarsNeeded * stockLen, weightLbs: totalWeight,
-      bendDescription: "Straight — stock length", stockLengthFt: stockLen,
-      barsPerStock: 1, stockBarsNeeded,
+      bendDescription: "Straight stock length",
+      stockLengthFt: stockLen, barsPerStock: 1, stockBarsNeeded,
     });
   }
 
@@ -390,27 +453,57 @@ function buildFromCutSheet(consolidated: any, products: Product[]): TakeoffResul
 
     let qty = rawQty;
     let desc = "";
-    if (isVaporBarrier(matName) && unit === "SF") {
-      const rolls = Math.ceil(rawQty / VAPOR_BARRIER_SF_PER_ROLL);
-      desc = `10 mil poly • ${rawQty.toLocaleString()} SF required • ${rolls} roll(s) @ 20×100 (2,000 SF/roll)`;
-      qty = rolls;
-    } else if (isChair(matName) && (unit === "EA" || unit === "PC" || unit === "PCS")) {
-      const bags = Math.ceil(rawQty / CHAIRS_PER_BAG);
-      desc = `${rawQty} pc required • ${bags} bag(s) @ 500 pc/bag`;
-      qty = bags;
+
+    if (isVaporBarrier(matName)) {
+      if (unit === "SF") {
+        // Convert SF -> rolls. Detect roll size from name (32x100=3200SF, 20x100=2000SF)
+        const isWide = matName.toLowerCase().includes("32");
+        const rollSF = isWide ? 3200 : 2000;
+        const rolls = Math.ceil(rawQty / rollSF);
+        const widthLabel = isWide ? "32x100" : "20x100";
+        const milMatch = matName.match(/(\d+)\s*mil/i);
+        const milLabel = milMatch ? `${milMatch[1]} mil` : "poly";
+        desc = `${milLabel} - ${rawQty.toLocaleString()} SF - ${rolls} roll(s) @ ${widthLabel} (${rollSF.toLocaleString()} SF/roll)`;
+        qty = rolls;
+      } else if (unit === "ROLL" || unit === "ROLLS") {
+        qty = rawQty;
+        desc = `${rawQty} roll(s)`;
+      } else {
+        qty = rawQty;
+        desc = `${rawQty} ${unit}`;
+      }
+      const matched = matchPolyProduct(matName, qty, products);
+      if (matched) {
+        lineItems.push({ ...matched, description: desc });
+      } else {
+        lineItems.push({ qboItemId: "CUSTOM", name: matName, description: desc, qty, unitPrice: 0, amount: 0 });
+      }
+    } else if (isChair(matName)) {
+      if (unit === "EA" || unit === "PC" || unit === "PCS") {
+        const bags = Math.ceil(rawQty / CHAIRS_PER_BAG);
+        desc = `${rawQty} pc required - ${bags} bag(s) @ 500 pc/bag`;
+        qty = bags;
+      } else {
+        desc = `${rawQty} ${unit}`;
+      }
+      const matched = matchProduct(matName, qty, unit, products);
+      if (matched) {
+        lineItems.push({ ...matched, description: desc });
+      } else {
+        lineItems.push({ qboItemId: "CUSTOM", name: matName, description: desc, qty, unitPrice: 0, amount: 0 });
+      }
     } else {
       desc = `${rawQty} ${unit}`;
-    }
-
-    const matched = matchProduct(matName, qty, unit, products);
-    if (matched) {
-      lineItems.push({ ...matched, description: desc });
-    } else {
-      lineItems.push({ qboItemId: "CUSTOM", name: om.name || matName, description: desc, qty, unitPrice: 0, amount: 0 });
+      const matched = matchProduct(matName, qty, unit, products);
+      if (matched) {
+        lineItems.push({ ...matched, description: desc });
+      } else {
+        lineItems.push({ qboItemId: "CUSTOM", name: om.name || matName, description: desc, qty, unitPrice: 0, amount: 0 });
+      }
     }
   }
 
-  return { lineItems, fabItems, takeoffNotes, projectName };
+    return { lineItems, fabItems, takeoffNotes, projectName };
 }
 
 // ── Core takeoff function ────────────────────────────────────────────────────
