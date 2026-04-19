@@ -111,10 +111,11 @@ export function registerRoutes(httpServer: Server, app: Express) {
         console.log(`[Images] Stored ${mediaUrls.length} image(s) — total pending: ${merged.length}`);
       }
 
-      // Save inbound message (append image note if MMS)
-      const bodyWithMedia = mediaUrls.length > 0
-        ? (cleanBody ? `${cleanBody} [📷 ${mediaUrls.length} image(s) attached]` : `[📷 ${mediaUrls.length} image(s) attached]`)
-        : cleanBody;
+      // Save inbound message — always preserve the original text/link.
+      // Only replace body with image note when it's a pure MMS with no text.
+      const bodyWithMedia = (numMedia > 0 && !cleanBody)
+        ? `[📷 ${numMedia} image(s) attached]`
+        : cleanBody; // original URL/text always shown as-is
       storage.addMessage({
         conversationId: conv.id,
         direction: "inbound",
