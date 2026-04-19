@@ -9,6 +9,9 @@ import { performTakeoff } from "./takeoff";
 import { resolveLinksFromText } from "./link-resolver";
 import { generateCutSheetPdf, emailCutSheet } from "./cutsheet";
 import type { LineItem } from "@shared/schema";
+import * as fs from "fs";
+import * as path from "path";
+import * as os from "os";
 
 const OWNER_EMAIL = "maddoxconstruction1987@gmail.com";
 const TAX_RATE = 0.0825; // McKinney, TX: 8.25% combined sales tax
@@ -38,33 +41,55 @@ export function registerRoutes(httpServer: Server, app: Express) {
     const cleanPhone = fromPhone.trim();
     const cleanBody = (messageBody || "").trim();
 
-    // Collect any MMS image URLs Twilio sends (MediaUrl0, MediaUrl1, ...)
-    // Download each image and convert to base64 data URI — Twilio URLs require auth
-    // and OpenAI can't fetch them directly.
+    // Collect any MMS media Twilio sends (images + PDFs)
+    // Download with Basic auth — Twilio URLs require it; OpenAI can't fetch them directly.
     const mediaUrls: string[] = [];
+    const mmsPdfUrls: string[] = []; // PDFs sent as MMS attachments
     const numMedia = parseInt(NumMedia || "0", 10);
+    const accountSid = process.env.TWILIO_ACCOUNT_SID!;
+    const authToken = process.env.TWILIO_AUTH_TOKEN!;
+    const twilioAuth = Buffer.from(`${accountSid}:${authToken}`).toString("base64");
+
     for (let i = 0; i < numMedia; i++) {
       const url = req.body[`MediaUrl${i}`];
       const type = (req.body[`MediaContentType${i}`] || "").toLowerCase();
-      if (!url || !type.startsWith("image/")) continue;
+      if (!url) continue;
+
       try {
-        const accountSid = process.env.TWILIO_ACCOUNT_SID!;
-        const authToken = process.env.TWILIO_AUTH_TOKEN!;
-        const auth = Buffer.from(`${accountSid}:${authToken}`).toString("base64");
-        const imgResp = await globalThis.fetch(url, {
-          headers: { Authorization: `Basic ${auth}` },
+        const mediaResp = await globalThis.fetch(url, {
+          headers: { Authorization: `Basic ${twilioAuth}` },
         });
-        if (!imgResp.ok) {
-          console.warn(`[MMS] Could not download Twilio image (${imgResp.status}): ${url}`);
+        if (!mediaResp.ok) {
+          console.warn(`[MMS] Could not download Twilio media (${mediaResp.status}): ${url}`);
           continue;
         }
-        const imgBuf = await imgResp.arrayBuffer();
-        const mimeType = type.split(";")[0] || "image/jpeg";
-        const b64 = Buffer.from(imgBuf).toString("base64");
-        mediaUrls.push(`data:${mimeType};base64,${b64}`);
-        console.log(`[MMS] Downloaded & encoded Twilio image (${Math.round(imgBuf.byteLength / 1024)}KB) as base64`);
+        const mediaBuf = await mediaResp.arrayBuffer();
+
+        if (type.startsWith("image/")) {
+          // Image → base64 data URI for OpenAI vision
+          const mimeType = type.split(";")[0] || "image/jpeg";
+          const b64 = Buffer.from(mediaBuf).toString("base64");
+          mediaUrls.push(`data:${mimeType};base64,${b64}`);
+          console.log(`[MMS] Downloaded image (${Math.round(mediaBuf.byteLength / 1024)}KB) as base64`);
+        } else if (
+          type.includes("pdf") ||
+          type.includes("msword") ||
+          type.includes("officedocument") ||
+          type.includes("octet-stream")
+        ) {
+          // PDF/document → save to /tmp and expose via internal URL for takeoff engine
+          const ext = type.includes("pdf") ? ".pdf" : ".pdf";
+          const tmpName = `mms_${Date.now()}_${i}${ext}`;
+          const tmpPath = path.join(os.tmpdir(), tmpName);
+          fs.writeFileSync(tmpPath, Buffer.from(mediaBuf));
+          const internalUrl = `http://localhost:${process.env.PORT || 5000}/api/tmp/${tmpName}`;
+          mmsPdfUrls.push(internalUrl);
+          console.log(`[MMS] Downloaded PDF/doc (${Math.round(mediaBuf.byteLength / 1024)}KB) → ${tmpPath}`);
+        } else {
+          console.log(`[MMS] Skipped unsupported media type: ${type}`);
+        }
       } catch (err: any) {
-        console.warn(`[MMS] Failed to download Twilio image: ${err?.message}`);
+        console.warn(`[MMS] Failed to download Twilio media: ${err?.message}`);
       }
     }
 
@@ -89,6 +114,12 @@ export function registerRoutes(httpServer: Server, app: Express) {
         console.warn(`[LinkResolver] Error resolving links: ${err?.message}`);
         linkResolveFailed = true;
       }
+    }
+
+    // Merge MMS PDF attachments into pdfUrls
+    if (mmsPdfUrls.length > 0) {
+      pdfUrls.push(...mmsPdfUrls);
+      console.log(`[MMS] Added ${mmsPdfUrls.length} MMS PDF(s) to pdfUrls`);
     }
 
     // If a link was sent but we couldn't open it, notify the customer right away
@@ -795,6 +826,19 @@ export function registerRoutes(httpServer: Server, app: Express) {
       } catch (_) {}
     }
   }
+
+  // ── Serve temp files (MMS PDFs downloaded from Twilio) ─────────────────────
+  app.get("/api/tmp/:filename", (req, res) => {
+    const filename = path.basename(req.params.filename); // prevent path traversal
+    const tmpPath = path.join(os.tmpdir(), filename);
+    if (!fs.existsSync(tmpPath)) {
+      return res.status(404).send("Not found");
+    }
+    const ext = path.extname(filename).toLowerCase();
+    const mime = ext === ".pdf" ? "application/pdf" : "application/octet-stream";
+    res.set("Content-Type", mime);
+    res.sendFile(tmpPath);
+  });
 
   // ── Admin API ───────────────────────────────────────────────────────────────
   // Get all conversations with messages
