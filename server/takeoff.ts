@@ -34,7 +34,59 @@ export interface TakeoffResult {
   projectName: string;
 }
 
+// ── Stock fabricated shape catalog ───────────────────────────────────────────
+// Any fab shape not in this list must go to Fabrication-1 at $0.75/lb.
+// Keys are normalized: "TYPE|BARSIZE|DIM" e.g. "stirrup|#3|6x18"
+const STOCK_FAB_SHAPES: Record<string, { qboNameFragment: string }> = {
+  // Stirrups — #3 only, 3 sizes
+  "stirrup|#3|6x18":  { qboNameFragment: "stirrup" },
+  "stirrup|#3|8x18":  { qboNameFragment: "stirrup" },
+  "stirrup|#3|8x24":  { qboNameFragment: "stirrup" },
+  // Corner bars — 2ftx2ft only, #4/#5/#6
+  "corner|#4|2x2":    { qboNameFragment: "corner bar 4" },
+  "corner|#5|2x2":    { qboNameFragment: "corner bar 5" },
+  "corner|#6|2x2":    { qboNameFragment: "corner bar 6" },
+  // Rings — #3 only, 4 diameters
+  "ring|#3|8":        { qboNameFragment: "ring" },
+  "ring|#3|12":       { qboNameFragment: "ring" },
+  "ring|#3|18":       { qboNameFragment: "ring" },
+  "ring|#3|24":       { qboNameFragment: "ring" },
+};
+
+// Normalize dimensions: "12\"x24\"" or "12x24" or "12 x 24" -> "12x24"
+function normDim(d: string): string {
+  return d.replace(/"|'|ft|in|\s/gi, "").replace(/[xX×by]+/, "x").toLowerCase();
+}
+// Normalize bar size: "#4" "4" "no4" -> "#4"
+function normBar(b: string): string {
+  const m = b.match(/(\d+)/);
+  return m ? `#${m[1]}` : b.toLowerCase();
+}
+
+// Check if a fab shape name matches a stock item exactly
+// Returns the stock shape key if found, null if it should go to Fabrication-1
+function findStockFabKey(
+  shapeName: string,
+  barSize: string,
+  dimensions: string
+): string | null {
+  const bar = normBar(barSize);
+  const dim = normDim(dimensions);
+  const name = shapeName.toLowerCase();
+
+  let type = "";
+  if (name.includes("stirrup") || name.includes("tie")) type = "stirrup";
+  else if (name.includes("corner") || name.includes("l-bar") || name.includes("l bar")) type = "corner";
+  else if (name.includes("ring") || name.includes("spiral")) type = "ring";
+  else return null; // unknown fab shape type → always custom
+
+  const key = `${type}|${bar}|${dim}`;
+  return STOCK_FAB_SHAPES[key] ? key : null;
+}
+
 // ── Fuzzy match a material name to QBO products ──────────────────────────────
+// For rebar sizes: strict — name must mention the bar size to avoid false matches.
+// For fab shapes: use findStockFabKey above; if not stock, return null (caller uses Fabrication-1).
 function matchProduct(
   materialName: string,
   qty: number,
@@ -42,13 +94,34 @@ function matchProduct(
   products: Product[]
 ): LineItem | null {
   const lower = materialName.toLowerCase();
-  let best = products.find(p => p.name.toLowerCase() === lower);
-  if (!best) {
+
+  // Guard: never fuzzy-match fabricated shape names (stirrup, corner bar, ring, tie)
+  // to non-fab products like "Placement Drawings". These must only match their
+  // exact QBO name or go to Fabrication-1 via the caller.
+  const isFabShape = /stirrup|corner.?bar|ring|tie|l-bar|u-bar|hook|hairpin/i.test(materialName);
+
+  let best: Product | undefined;
+
+  // 1. Exact name match
+  best = products.find(p => p.name.toLowerCase() === lower);
+
+  // 2. For non-fab shapes: partial match (both directions)
+  if (!best && !isFabShape) {
     best = products.find(p => {
       const pn = p.name.toLowerCase();
       return pn.includes(lower) || lower.includes(pn);
     });
   }
+
+  // 3. For fab shapes: only allow match if the QBO product name also contains a fab keyword
+  if (!best && isFabShape) {
+    best = products.find(p => {
+      const pn = p.name.toLowerCase();
+      return (pn.includes(lower) || lower.includes(pn)) &&
+        /stirrup|corner|ring/i.test(pn);
+    });
+  }
+
   if (!best) return null;
   const unitPrice = best.unitPrice ?? 0;
   return {

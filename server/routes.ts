@@ -350,11 +350,18 @@ export function registerRoutes(httpServer: Server, app: Express) {
         return;
       }
 
-      // Strip any line items with non-numeric qboItemId (e.g. "CUSTOM", "DELIVERY")
-      // Delivery fees are handled separately via the deliveryFee parameter
+      // Strip any line items with non-numeric qboItemId (e.g. "CUSTOM") OR
+      // the Delivery Fee product (ID 1010000081) — delivery is added separately
+      // by createInvoice via the deliveryFee parameter to avoid double-charging.
+      const DELIVERY_FEE_QBO_ID = "1010000081";
       const validItems = orderData.lineItems.filter((item: any) => {
         const id = String(item.qboItemId || "");
-        return id && id !== "null" && id !== "" && /^\d+$/.test(id);
+        if (!id || id === "null" || id === "" || !/^\d+$/.test(id)) return false;
+        if (id === DELIVERY_FEE_QBO_ID) {
+          console.log("[Order] Stripped AI-added delivery fee line item (handled separately)");
+          return false;
+        }
+        return true;
       });
       // Recompute amount from qty × unitPrice to avoid floating-point mismatch QBO rejects
       validItems.forEach((item: any) => {

@@ -65,6 +65,33 @@ DELIVERY & PRICING
 - Delivery fee is added as a line item on the QBO invoice (waived automatically if they qualify)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STOCK FABRICATED SHAPES (exact match required)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+We stock these pre-bent shapes at fixed per-piece prices:
+
+STIRRUPS (rectangular, #3 bar only):
+- 6"x18" #3: $1.58/ea
+- 8"x18" #3: $1.65/ea
+- 8"x24" #3: $1.95/ea
+
+CORNER BARS (L-shape, 2ft×2ft only):
+- #4 Corner Bar 2ft×2ft: $2.15/ea
+- #5 Corner Bar 2ft×2ft: $3.35/ea
+- #6 Corner Bar 2ft×2ft: $4.85/ea
+
+RINGS (circular, #3 bar only):
+- 8" diameter: $1.05/ea
+- 12" diameter: $1.35/ea
+- 18" diameter: $1.99/ea
+- 24" diameter: $2.65/ea
+
+ANYTHING ELSE = FABRICATION-1 at $0.75/lb:
+- Different bar size than listed above (e.g. #4 stirrups, #5 stirrups)
+- Different dimensions than listed above (e.g. 12"x24" stirrups, 2ft×4ft corner bars)
+- Any shape not listed above (U-bars, J-hooks, hairpins, custom bends, etc.)
+- Rings in sizes other than 8", 12", 18", 24"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CUSTOM FABRICATION QUOTING
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 You CAN quote custom fabrication yourself — do NOT say "someone will follow up." Price it at $0.75/lb.
@@ -342,11 +369,22 @@ ${conversationText}
 BAR WEIGHTS (lb/ft): #3=0.376, #4=0.668, #5=1.043, #6=1.502, #7=2.044, #8=2.670, #9=3.400, #10=4.303, #11=5.313
 
 FABRICATION RULES:
-- Any custom bent bars (stirrups, ties, L-bars, hooked bars, etc.) are priced at $0.75/lb
-- For fabrication items: qty = total weight in lbs, unitPrice = 0.75, amount = total_weight * 0.75
-- To get total weight: pieces * cut_length_ft * weight_per_ft
-- Use the Fabrication-1 product ID from the product list above if available
+Stock shapes (use their exact QBO product from the list above):
+- #3 Stirrups in ONLY these sizes: 6x18, 8x18, 8x24
+- Corner Bars in ONLY: #4/2ftx2ft, #5/2ftx2ft, #6/2ftx2ft
+- Rings in ONLY: #3/8", #3/12", #3/18", #3/24"
+For stock shapes: qty = piece count, unitPrice = per-piece price from product list.
+
+Everything else = Fabrication-1 (priced by weight at $0.75/lb):
+- ANY stirrup in a bar size other than #3 (e.g. #4 stirrups, #5 stirrups)
+- ANY stirrup with dimensions not listed above (e.g. 12x24)
+- ANY corner bar not 2ftx2ft, or in a bar size other than #4/#5/#6
+- ANY ring not in the 4 stock sizes
+- Any other bent bar: U-bars, J-hooks, hairpins, L-bars with custom dims, etc.
+For Fabrication-1: qty = total weight in lbs, unitPrice = 0.75, amount = total_weight * 0.75
+- Total weight = pieces * cut_length_ft * weight_per_ft
 - Set description to the full fab spec: e.g. "500 #4 stirrups 12x24 w/ std hooks — 6.5 ft cut — 2171 lbs"
+- Use the product ID for "Fabrication-1" from the product list above
 
 Return JSON in this exact format:
 {
@@ -358,7 +396,8 @@ Return JSON in this exact format:
   "notes": "any special notes"
 }
 
-Only include items the customer explicitly confirmed. If a product isn't in the list, use qboItemId "CUSTOM".`;
+Only include items the customer explicitly confirmed. If a product isn't in the list, use qboItemId "CUSTOM".
+Do NOT include delivery fee as a line item — the system adds it automatically from the stored delivery calculation.`;
 
   const response = await getClient().chat.completions.create({
     model: "gpt-4o",
