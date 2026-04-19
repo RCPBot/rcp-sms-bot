@@ -690,10 +690,16 @@ export function registerRoutes(httpServer: Server, app: Express) {
       });
 
       const items = takeoffResult.lineItems;
-      const top5 = items.slice(0, 5).map(i => `${i.qty > 1 ? i.qty + "x " : ""}${i.name}: $${i.amount.toFixed(2)}`).join("\n");
-      const moreCount = items.length > 5 ? `\n+ ${items.length - 5} more items` : "";
+      // Split into priced items (amount > 0) and unpriced (qty/length TBD)
+      const pricedItems = items.filter(i => i.amount > 0);
+      const unpricedItems = items.filter(i => i.amount === 0);
+      const top5 = pricedItems.slice(0, 5).map(i => `${i.qty > 1 ? i.qty + "x " : ""}${i.name}: $${i.amount.toFixed(2)}`).join("\n");
+      const moreCount = pricedItems.length > 5 ? `\n+ ${pricedItems.length - 5} more items` : "";
       const fabCount = takeoffResult.fabItems.filter(f => !f.bendDescription.includes("stock length")).length;
       const fabNote = fabCount > 0 ? `\n${fabCount} custom fab item(s) @ $0.75/lb included.` : "";
+      const tbdNote = unpricedItems.length > 0
+        ? `\n\nNeeds field verification (qty not found in plans):\n${unpricedItems.map(i => `- ${i.name}`).join("\n")}`
+        : "";
 
       const estimateTax = subtotal * TAX_RATE;
       const estimateTotal = subtotal + estimateTax;
@@ -701,11 +707,11 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
       let replyText: string;
       if (estimateLink) {
-        replyText = `Takeoff complete for ${takeoffResult.projectName}!\n\n${top5}${moreCount}${fabNote}\n\nSubtotal: $${subtotal.toFixed(2)}${taxLine}\n\nView & approve your estimate:\n${estimateLink}\n\nOnce you approve, we\'ll process your fabrication order.`;
+        replyText = `Takeoff complete for ${takeoffResult.projectName}!\n\n${top5}${moreCount}${fabNote}${tbdNote}\n\nSubtotal: $${subtotal.toFixed(2)}${taxLine}\n\nView & approve your estimate:\n${estimateLink}\n\nOnce you approve, we\'ll process your fabrication order.`;
       } else if (estimateNumber) {
-        replyText = `Takeoff complete for ${takeoffResult.projectName}!\n\n${top5}${moreCount}${fabNote}\n\nSubtotal: $${subtotal.toFixed(2)}${taxLine}\n\nEstimate #${estimateNumber} emailed to ${conv.customerEmail}. Reply APPROVE to confirm.`;
+        replyText = `Takeoff complete for ${takeoffResult.projectName}!\n\n${top5}${moreCount}${fabNote}${tbdNote}\n\nSubtotal: $${subtotal.toFixed(2)}${taxLine}\n\nEstimate #${estimateNumber} emailed to ${conv.customerEmail}. Reply APPROVE to confirm.`;
       } else {
-        replyText = `Takeoff complete for ${takeoffResult.projectName}!\n\n${top5}${moreCount}${fabNote}\n\nSubtotal: $${subtotal.toFixed(2)}${taxLine}\n\nReply APPROVE to confirm this estimate, or call 469-631-7730 with questions.`;
+        replyText = `Takeoff complete for ${takeoffResult.projectName}!\n\n${top5}${moreCount}${fabNote}${tbdNote}\n\nSubtotal: $${subtotal.toFixed(2)}${taxLine}\n\nReply APPROVE to confirm this estimate, or call 469-631-7730 with questions.`;
       }
 
       storage.addMessage({ conversationId, direction: "outbound", body: replyText });

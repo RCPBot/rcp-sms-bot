@@ -152,9 +152,32 @@ function isVaporBarrier(name: string): boolean {
   const l = name.toLowerCase();
   return l.includes("vapor") || l.includes("poly") || l.includes("visqueen") || l.includes(" mil");
 }
-function isChair(name: string): boolean {
+function isWireChair(name: string): boolean {
   const l = name.toLowerCase();
-  return l.includes("chair") || l.includes("dobie") || l.includes("slab bolster") || l.includes("bar chair");
+  // Wire/plastic chairs sold in 500-pc bags
+  return (l.includes("chair") && !l.includes("dobie")) || l.includes("slab bolster") || l.includes("bar chair");
+}
+function isDobie(name: string): boolean {
+  const l = name.toLowerCase();
+  return l.includes("dobie") || l.includes("dobie brick") || l.includes("concrete block chair") || l.includes("concrete brick");
+}
+// Keep isChair as a combined alias for backward compat
+function isChair(name: string): boolean {
+  return isWireChair(name) || isDobie(name);
+}
+
+// Match a dobie brick to the right QBO product
+function matchDobieProduct(qty: number, products: Product[]): LineItem | null {
+  // Default to Dobie Brick 3"x3"x2" at $0.55
+  const best = products.find(p => p.name.toLowerCase().includes("dobie brick"));
+  if (!best) return null;
+  return {
+    qboItemId: best.qboItemId,
+    name: best.name,
+    qty,
+    unitPrice: best.unitPrice ?? 0.55,
+    amount: Math.round(qty * (best.unitPrice ?? 0.55) * 100) / 100,
+  };
 }
 
 // Parse poly mil thickness and roll size from a material name like "6 mil poly 32x100" or "10mil"
@@ -222,8 +245,9 @@ RULES:
 - Do NOT skip a page just because it has no formal rebar schedule — read ALL notes and details.
 - Do NOT list post-tension STRANDS as rebar (strands are not our product). DO list conventional deformed bars.
 - For poly/vapor barrier: always include mil thickness AND roll dimensions in the name (e.g. "6 mil poly 32x100"). Include quantity in SF if given, otherwise as rolls.
-- For chairs/dobies: list as EA with exact count if shown, or estimate from slab area at 1 chair per 16 SF.
-- For dobie bricks (concrete block chairs): list as "dobie brick" with count.
+- For concrete support: foundation plans use DOBIE BRICKS (concrete block chairs), NOT wire chairs. Output as name "dobie brick" with EA count.
+- Estimate dobie brick count from beam lengths: 1 dobie per 4 linear feet of beam, or use exact count if shown.
+- Wire chairs (500-pc bags) are only for elevated slabs/decks. Do not use for foundation plans.
 - NEVER return null for qty or cutLengthFt. If you cannot determine an exact count, make your best estimate based on slab dimensions and note it as approximate. A rough number is better than null.
 - For beam bars where qty cannot be counted (typical details repeated across a slab), estimate total linear feet based on the slab perimeter/interior beam layout visible on the plan.
 - Include the page number or sheet name in notes if visible.
@@ -486,7 +510,16 @@ function buildFromCutSheet(consolidated: any, products: Product[]): TakeoffResul
       } else {
         lineItems.push({ qboItemId: "CUSTOM", name: matName, description: desc, qty, unitPrice: 0, amount: 0 });
       }
-    } else if (isChair(matName)) {
+    } else if (isDobie(matName)) {
+      qty = rawQty;
+      desc = `${rawQty} EA`;
+      const matched = matchDobieProduct(qty, products);
+      if (matched) {
+        lineItems.push({ ...matched, description: desc });
+      } else {
+        lineItems.push({ qboItemId: "CUSTOM", name: "Dobie Brick", description: desc, qty, unitPrice: 0.55, amount: Math.round(qty * 0.55 * 100) / 100 });
+      }
+    } else if (isWireChair(matName)) {
       if (unit === "EA" || unit === "PC" || unit === "PCS") {
         const bags = Math.ceil(rawQty / CHAIRS_PER_BAG);
         desc = `${rawQty} pc required - ${bags} bag(s) @ 500 pc/bag`;
