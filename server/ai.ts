@@ -258,6 +258,7 @@ SPECIAL SYSTEM TAGS (do NOT include in visible message text):
 - [INFO_COMPLETE] — when all customer info collected
 - [CALC_DELIVERY: address] — when customer provides delivery address (triggers distance lookup)
 - [PLAN_TAKEOFF: ready] — when customer wants an automated takeoff/estimate from their plan set photos
+- [LOOKUP_ORDERS] — when customer asks about past orders, previous invoices, last order total, order history, or anything about a previous purchase. Do NOT guess — emit this tag and the system will fetch their real invoice history from QuickBooks and call you again with the data.
 
 PLAN SET TAKEOFF AUTOMATION:
 Customers can text their plan set photos and get a full material estimate automatically.
@@ -283,18 +284,25 @@ export type AIIntent =
   | { type: "confirm_order"; text: string }
   | { type: "info_complete"; text: string }
   | { type: "calc_delivery"; text: string; address: string }
-  | { type: "plan_takeoff"; text: string };
+  | { type: "plan_takeoff"; text: string }
+  | { type: "lookup_orders"; text: string };
 
 export async function processMessage(
   conversation: Conversation,
   inboundText: string,
-  mediaUrls: string[] = []
+  mediaUrls: string[] = [],
+  orderHistory?: string
 ): Promise<AIIntent> {
   const products = storage.getAllProducts();
   const history = storage.getMessages(conversation.id);
 
+  let systemPrompt = buildSystemPrompt(products, conversation);
+  if (orderHistory) {
+    systemPrompt += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCUSTOMER ORDER HISTORY (from QuickBooks)\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n${orderHistory}\nUse this to answer questions about past orders, totals, or invoice status. Tell them to call 469-631-7730 or check their email for the full invoice PDF.`;
+  }
+
   const chatMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-    { role: "system", content: buildSystemPrompt(products, conversation) },
+    { role: "system", content: systemPrompt },
   ];
 
   // Last 20 messages for context
@@ -353,6 +361,11 @@ export async function processMessage(
   if (rawText.includes("[PLAN_TAKEOFF:")) {
     const cleanText = rawText.replace(/\[PLAN_TAKEOFF:[^\]]*\]/i, "").trim();
     return { type: "plan_takeoff", text: cleanText };
+  }
+
+  if (rawText.includes("[LOOKUP_ORDERS]")) {
+    const cleanText = rawText.replace("[LOOKUP_ORDERS]", "").trim();
+    return { type: "lookup_orders", text: cleanText };
   }
 
   return { type: "message", text: rawText };

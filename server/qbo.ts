@@ -350,6 +350,52 @@ export async function getEstimateStatus(estimateId: string): Promise<string> {
   }
 }
 
+// ── Get recent invoices for a customer ──────────────────────────────────────
+export async function getCustomerInvoices(customerId: string, limit = 5): Promise<Array<{
+  invoiceNumber: string;
+  date: string;
+  dueDate: string;
+  total: number;
+  balance: number;
+  status: string;
+  lines: Array<{ name: string; qty: number; unitPrice: number; amount: number }>;
+}>> {
+  try {
+    const encoded = encodeURIComponent(
+      `SELECT * FROM Invoice WHERE CustomerRef = '${customerId}' ORDERBY TxnDate DESC MAXRESULTS ${limit}`
+    );
+    const data = await qboGet(`/query?query=${encoded}`);
+    const invoices = data.QueryResponse?.Invoice || [];
+    return invoices.map((inv: any) => {
+      const lines = (inv.Line || [])
+        .filter((l: any) => l.DetailType === "SalesItemLineDetail")
+        .map((l: any) => ({
+          name: l.SalesItemLineDetail?.ItemRef?.name || l.Description || "Item",
+          qty: l.SalesItemLineDetail?.Qty || 1,
+          unitPrice: l.SalesItemLineDetail?.UnitPrice || 0,
+          amount: l.Amount || 0,
+        }));
+      const balance = inv.Balance ?? inv.TotalAmt ?? 0;
+      const total = inv.TotalAmt ?? 0;
+      let status = "Open";
+      if (inv.Balance === 0) status = "Paid";
+      else if (inv.Balance < inv.TotalAmt) status = "Partial";
+      return {
+        invoiceNumber: inv.DocNumber || inv.Id,
+        date: inv.TxnDate || "",
+        dueDate: inv.DueDate || "",
+        total,
+        balance,
+        status,
+        lines,
+      };
+    });
+  } catch (err) {
+    console.error("[QBO] getCustomerInvoices failed:", err);
+    return [];
+  }
+}
+
 // ── Check if QBO is configured ────────────────────────────────────────────────
 export function isQboConfigured(): boolean {
   const { clientId, clientSecret, refreshToken, realmId } = cfg();

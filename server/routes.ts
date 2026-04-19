@@ -4,7 +4,7 @@ import express from "express";
 import { storage } from "./storage";
 import { sendSms, isTwilioConfigured, sendPaymentLinkEmail } from "./sms";
 import { processMessage, extractOrderFromConversation, extractCustomerInfo, isAiConfigured } from "./ai";
-import { syncProducts, findOrCreateCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured } from "./qbo";
+import { syncProducts, findOrCreateCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices } from "./qbo";
 import { performTakeoff } from "./takeoff";
 import { resolveLinksFromText } from "./link-resolver";
 import { generateCutSheetPdf, emailCutSheet } from "./cutsheet";
@@ -295,9 +295,9 @@ export function registerRoutes(httpServer: Server, app: Express) {
         return;
       }
 
-      // Save and send the AI reply
+      // Save and send the AI reply (skip for lookup_orders — handler sends its own reply)
       const replyText = intent.text;
-      if (replyText) {
+      if (replyText && intent.type !== "lookup_orders") {
         storage.addMessage({
           conversationId: conv.id,
           direction: "outbound",
@@ -335,6 +335,37 @@ export function registerRoutes(httpServer: Server, app: Express) {
           // No images yet — AI already asked them to send pages; update stage
           storage.updateConversation(conv.id, { stage: "takeoff_pending" });
         }
+      }
+
+      if (intent.type === "lookup_orders") {
+        // Fetch real invoice history from QBO and re-run AI with that context
+        let orderHistoryText = "";
+        const qboId = conv.qboCustomerId;
+        if (qboId && isQboConfigured()) {
+          try {
+            const invoices = await getCustomerInvoices(qboId, 5);
+            if (invoices.length === 0) {
+              orderHistoryText = "No invoices found for this customer in QuickBooks.";
+            } else {
+              orderHistoryText = invoices.map(inv => {
+                const linesSummary = inv.lines
+                  .map(l => `  - ${l.name}: qty ${l.qty} @ $${l.unitPrice.toFixed(2)} = $${l.amount.toFixed(2)}`)
+                  .join("\n");
+                return `Invoice #${inv.invoiceNumber} | Date: ${inv.date} | Due: ${inv.dueDate} | Total: $${inv.total.toFixed(2)} | Balance: $${inv.balance.toFixed(2)} | Status: ${inv.status}\n${linesSummary}`;
+              }).join("\n\n");
+            }
+          } catch (err) {
+            console.error("[Orders] Failed to fetch customer invoices:", err);
+            orderHistoryText = "Unable to retrieve invoice history at this time.";
+          }
+        } else {
+          orderHistoryText = "Customer QBO ID not available — cannot retrieve order history.";
+        }
+        // Re-run AI with the order history injected into system prompt
+        const historyIntent = await processMessage(conv, cleanBody, mediaUrls, orderHistoryText);
+        const historyReply = historyIntent.text || "I wasn't able to find your order history. Please call us at 469-631-7730 for help.";
+        storage.addMessage({ conversationId: conv.id, direction: "outbound", body: historyReply });
+        await sendSms(cleanPhone, historyReply);
       }
 
       // If stage is takeoff_pending and images arrived, run the takeoff
