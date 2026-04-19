@@ -511,24 +511,24 @@ export async function convertEstimateToInvoice(qboEstimateId: string, customerEm
 // ── Get next sequential DocNumber for invoices or estimates ────────────────────
 async function getNextDocNumber(type: "Invoice" | "Estimate"): Promise<string> {
   try {
-    const encoded = encodeURIComponent(
-      `SELECT DocNumber FROM ${type} ORDERBY DocNumber DESC MAXRESULTS 1`
-    );
-    const data = await qboGet(`/query?query=${encoded}`);
+    const query = encodeURIComponent(`SELECT * FROM ${type} ORDERBY DocNumber DESC MAXRESULTS 1`);
+    const data = await qboGet(`/query?query=${query}`);
     const items: any[] = data.QueryResponse?.[type] || [];
-    if (items.length === 0) return type === "Invoice" ? "1001" : "5001";
-    const last = items[0].DocNumber || "";
-    // Extract trailing numeric portion and increment
-    const match = last.match(/(\d+)$/);
-    if (!match) return type === "Invoice" ? "1001" : "5001";
-    const next = parseInt(match[1], 10) + 1;
-    // Preserve any non-numeric prefix (e.g. "INV-" → "INV-1002")
-    const prefix = last.slice(0, last.length - match[1].length);
-    return `${prefix}${next}`;
-  } catch (err) {
-    console.error(`[QBO] getNextDocNumber(${type}) failed:`, err);
-    return "";
+    if (items.length > 0) {
+      const last = items[0].DocNumber || "";
+      const match = last.match(/(\d+)$/);
+      if (match) {
+        const maxNum = parseInt(match[1], 10);
+        if (!isNaN(maxNum)) {
+          const prefix = last.slice(0, last.length - match[1].length);
+          return `${prefix}${maxNum + 1}`;
+        }
+      }
+    }
+  } catch (err: any) {
+    console.error(`[QBO] Failed to fetch max DocNumber for ${type}:`, err?.message);
   }
+  return "10001";
 }
 
 // ── Get recent invoices for a customer ──────────────────────────────────────
