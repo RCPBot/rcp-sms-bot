@@ -6,7 +6,7 @@ import { sendSms, isTwilioConfigured, sendPaymentLinkEmail } from "./sms";
 import { processMessage, extractOrderFromConversation, extractCustomerInfo, isAiConfigured } from "./ai";
 import { syncProducts, findOrCreateCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice } from "./qbo";
 import { performTakeoff } from "./takeoff";
-import { resolveLinksFromText } from "./link-resolver";
+import { resolveLinksFromText, extractUrls } from "./link-resolver";
 import { generateCutSheetPdf, emailCutSheet } from "./cutsheet";
 import type { LineItem } from "@shared/schema";
 import * as fs from "fs";
@@ -275,6 +275,13 @@ export function registerRoutes(httpServer: Server, app: Express) {
         return;
       }
 
+      // ── Raw plan URL from customer message (for sonar-pro) ──────────────────
+      // Extract the first http(s) URL from the message body before any transformation.
+      const rawPlanUrl: string | undefined = (() => {
+        const urls = extractUrls(cleanBody);
+        return urls.length > 0 ? urls[0] : undefined;
+      })();
+
       // ── Helper: get all stored images + PDFs for this conversation ─────────
       const allImages = (): string[] => {
         const _parsed = conv.pendingImagesJson ? JSON.parse(conv.pendingImagesJson) : [];
@@ -291,7 +298,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
       // ── Auto-detect plan set: 3+ images OR any PDF sent → run takeoff ───────
       if ((mediaUrls.length >= 3 || pdfUrls.length >= 1) && conv.verified && conv.stage !== "takeoff_pending") {
-        await handlePlanTakeoff(conv.id, cleanPhone, allImages());
+        await handlePlanTakeoff(conv.id, cleanPhone, allImages(), rawPlanUrl);
         return;
       }
 
@@ -299,7 +306,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
       if (conv.stage === "takeoff_pending") {
         const imgs = allImages();
         if (imgs.length >= 1) {
-          await handlePlanTakeoff(conv.id, cleanPhone, imgs);
+          await handlePlanTakeoff(conv.id, cleanPhone, imgs, rawPlanUrl);
           return;
         }
         // No files yet — remind customer to send a link
@@ -383,7 +390,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
         // Check for any stored images (from this or prior messages)
         const imgs = allImages();
         if (imgs.length >= 1) {
-          await handlePlanTakeoff(conv.id, cleanPhone, imgs);
+          await handlePlanTakeoff(conv.id, cleanPhone, imgs, rawPlanUrl);
         } else {
           // No images yet — AI already asked them to send pages; update stage
           storage.updateConversation(conv.id, { stage: "takeoff_pending" });
@@ -423,7 +430,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
       // If stage is takeoff_pending and images arrived, run the takeoff
       if (conv.stage === "takeoff_pending" && (mediaUrls.length >= 1 || pdfUrls.length >= 1) && intent.type === "message") {
-        await handlePlanTakeoff(conv.id, cleanPhone, allImages());
+        await handlePlanTakeoff(conv.id, cleanPhone, allImages(), rawPlanUrl);
       }
 
     } catch (err) {
@@ -613,18 +620,22 @@ export function registerRoutes(httpServer: Server, app: Express) {
   }
 
   // ── Plan Takeoff Handler ──────────────────────────────────────────────────
-  async function handlePlanTakeoff(conversationId: number, phone: string, imageUrls: string[]) {
+  // planSourceUrl: raw Dropbox/Drive URL from the customer's message, forwarded to sonar-pro when available.
+  async function handlePlanTakeoff(conversationId: number, phone: string, imageUrls: string[], planSourceUrl?: string) {
     const conv = storage.getConversation(conversationId);
     if (!conv) return;
 
-    const ackMsg = `Got it! I'm analyzing your plan set now. This takes about 30 seconds — I'll send your estimate as soon as it's ready.`;
+    const usingPerplexity = !!(planSourceUrl && process.env.PERPLEXITY_API_KEY);
+    const ackMsg = usingPerplexity
+      ? `Got it! Running a full AI takeoff on your plan set now. This takes about 30–60 seconds — I’ll send your estimate as soon as it’s ready.`
+      : `Got it! I'm analyzing your plan set now. This takes about 30 seconds — I'll send your estimate as soon as it's ready.`;
     storage.addMessage({ conversationId, direction: "outbound", body: ackMsg });
     await sendSms(phone, ackMsg);
 
     const products = storage.getAllProducts();
 
     try {
-      const takeoffResult = await performTakeoff(imageUrls, products);
+      const takeoffResult = await performTakeoff(imageUrls, products, planSourceUrl);
 
       if (!takeoffResult.lineItems || takeoffResult.lineItems.length === 0) {
         const hasPdf = imageUrls.some(u => u.startsWith("pdf::"));

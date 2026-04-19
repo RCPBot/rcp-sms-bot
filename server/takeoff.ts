@@ -548,10 +548,25 @@ function buildFromCutSheet(consolidated: any, products: Product[]): TakeoffResul
 }
 
 // ── Core takeoff function ────────────────────────────────────────────────────
+// planSourceUrl: the raw external URL from the customer's message (Drive/Dropbox/etc.)
+//   When provided and PERPLEXITY_API_KEY is set, sonar-pro reads the document directly.
+//   Falls back to the two-pass GPT-4o pipeline for MMS images or local PDFs.
 export async function performTakeoff(
   mediaItems: string[],
-  products: Product[]
+  products: Product[],
+  planSourceUrl?: string
 ): Promise<TakeoffResult> {
+  // ── sonar-pro path: use when we have a real external URL ─────────────────
+  if (planSourceUrl && process.env.PERPLEXITY_API_KEY) {
+    console.log(`[Takeoff] sonar-pro path — planSourceUrl: ${planSourceUrl.substring(0, 80)}`);
+    try {
+      return await performSonarTakeoff(planSourceUrl, products);
+    } catch (err: any) {
+      console.error(`[Takeoff] sonar-pro failed (${err?.message}) — falling back to GPT-4o pipeline`);
+      // Fall through to existing pipeline below
+    }
+  }
+
   const pdfUrls = mediaItems.filter(u => u.startsWith("pdf::")).map(u => u.slice(5));
   const imageUrls = mediaItems.filter(u => !u.startsWith("pdf::") && !u.startsWith("__"));
 
@@ -658,4 +673,116 @@ export async function performTakeoff(
     try { raw = JSON.parse(response.choices[0].message.content || "{}"); } catch { raw = {}; }
     return buildFromCutSheet(raw, products);
   }
+}
+
+// ── Perplexity sonar-pro single-pass takeoff ─────────────────────────────────
+// Used when a raw external URL (Drive/Dropbox/etc.) is available.
+// sonar-pro fetches and reads the document itself — no base64, no chunking.
+
+const SONAR_PROMPT = (productList: string) => `You are a structural rebar estimator performing a material takeoff for Rebar Concrete Products, McKinney TX.
+
+Read the construction plan set at the URL provided in this message. Extract ALL rebar and materials.
+
+PLAN TYPES — read ALL carefully:
+1. REBAR SHOP DRAWINGS: Named bar marks (B1, S1, T1) with size, qty, cut length, bend description.
+2. FOUNDATION PLANS (post-tension or conventional): Read PLAN LEGEND, GENERAL NOTES, all callout bubbles. Numbered circles on plan view are strand or rebar counts.
+3. BEAM/PIER DETAIL SHEETS: Every section detail for rebar callouts. Read any PIER REINFORCING SCHEDULE table.
+4. SLAB PLANS: Slab reinforcing notes, chair spacing, poly/vapor barrier area.
+
+RULES:
+- Straight stock bars: list in "standardRebar" with barSize AND either totalLinearFt OR qty (piece count).
+- Fabricated/bent bars: list in "fabRebar" with mark, barSize, qty (pieces), cutLengthFt, bendDescription.
+- For foundation plans: beam detail callouts + pier schedules. Each beam type repeats — extract per type and note repetitions.
+- Do NOT list post-tension STRANDS as rebar.
+- For poly/vapor barrier: always include mil thickness AND roll dimensions in name (e.g. "6 mil poly 32x100").
+- Foundation plans use DOBIE BRICKS (not wire chairs). Output as name "dobie brick" with EA count.
+  Estimate dobie count from beam lengths: 1 dobie per 4 LF of beam, or use exact count if shown.
+- Wire chairs (500-pc bags) only for elevated slabs/decks.
+- NEVER return null for qty or cutLengthFt. Estimate if needed — a rough number is better than null.
+- Include project name if visible on the plan.
+
+AVAILABLE QBO PRODUCTS (match names exactly where possible):
+${productList}
+
+BAR WEIGHTS (lb/ft): #3=0.376, #4=0.668, #5=1.043, #6=1.502, #7=2.044, #8=2.670, #9=3.400, #10=4.303, #11=5.313
+
+Return ONLY valid JSON in this exact format:
+{
+  "projectName": "name from plan title block, or null",
+  "notes": ["sheet notes", "plan type observations"],
+  "standardRebar": [
+    {"barSize": "#5", "totalLinearFt": 840, "location": "beam top and bottom"},
+    {"barSize": "#3", "qty": 25, "location": "corner bars per general notes"}
+  ],
+  "fabRebar": [
+    {"mark": "B1", "barSize": "#4", "qty": 48, "cutLengthFt": 5.5, "bendDescription": "90-deg hook both ends, 4in legs"},
+    {"mark": "PIER-12IN-LOOP", "barSize": "#3", "qty": 20, "cutLengthFt": 3.5, "bendDescription": "closed loop tie @ 16in spacing"}
+  ],
+  "otherMaterials": [
+    {"name": "6 mil poly 32x100", "qty": 3200, "unit": "SF"},
+    {"name": "dobie brick", "qty": 24, "unit": "EA"}
+  ]
+}`;
+
+export async function performSonarTakeoff(
+  planUrl: string,
+  products: Product[]
+): Promise<TakeoffResult> {
+  const productList = products
+    .filter(p => p.unitPrice && p.unitPrice > 0)
+    .map(p => `- "${p.name}" @ $${p.unitPrice?.toFixed(2)}`)
+    .join("\n");
+
+  const prompt = SONAR_PROMPT(productList);
+
+  console.log(`[Takeoff/Sonar] Starting sonar-pro takeoff for: ${planUrl.substring(0, 80)}...`);
+
+  const resp = await globalThis.fetch("https://api.perplexity.ai/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${process.env.PERPLEXITY_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "sonar-pro",
+      messages: [
+        {
+          role: "system",
+          content: "You are a structural rebar estimator. Read the plan set at the URL the user provides and return a complete material takeoff as JSON. Return ONLY valid JSON — no prose, no markdown fences.",
+        },
+        {
+          role: "user",
+          content: `Please perform a complete material takeoff from this plan set: ${planUrl}\n\n${prompt}`,
+        },
+      ],
+      temperature: 0,
+      max_tokens: 8000,
+      return_citations: false,
+    }),
+  });
+
+  if (!resp.ok) {
+    const errBody = await resp.text();
+    throw new Error(`Perplexity API error ${resp.status}: ${errBody.substring(0, 200)}`);
+  }
+
+  const data = await resp.json() as any;
+  const rawText: string = data?.choices?.[0]?.message?.content || "";
+  console.log(`[Takeoff/Sonar] Response: ${rawText.length} chars — first 500: ${rawText.substring(0, 500)}`);
+
+  // Strip markdown fences if model adds them anyway
+  const jsonText = rawText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
+
+  let consolidated: any = {};
+  try {
+    consolidated = JSON.parse(jsonText);
+  } catch (err) {
+    console.error(`[Takeoff/Sonar] JSON parse failed — raw: ${rawText.substring(0, 300)}`);
+    throw new Error("sonar-pro returned non-JSON response");
+  }
+
+  const itemCount = (consolidated.standardRebar?.length || 0) + (consolidated.fabRebar?.length || 0) + (consolidated.otherMaterials?.length || 0);
+  console.log(`[Takeoff/Sonar] Parsed: ${consolidated.standardRebar?.length || 0} straight bar sizes, ${consolidated.fabRebar?.length || 0} fab marks, ${consolidated.otherMaterials?.length || 0} other materials (${itemCount} total)`);
+
+  return buildFromCutSheet(consolidated, products);
 }
