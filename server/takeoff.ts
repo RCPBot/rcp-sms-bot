@@ -224,107 +224,157 @@ function matchPolyProduct(matName: string, qty: number, products: Product[]): Li
 }
 
 // ── Pass 1 prompt: raw extraction per chunk ───────────────────────────────────
-// Focus: read EVERY bar mark and material. No summarizing. No totals.
-const PASS1_PROMPT = `You are a licensed structural rebar detailer performing a complete material takeoff from construction plan pages.
-Your job is to extract EVERY rebar item and material with FULL quantities and dimensions — not just names.
+// Focus: classify EVERY bar mark as fabricated (bent) or stock (straight),
+// produce cut-sheet-style records with show-your-math quantities.
+const PASS1_PROMPT = `You are a licensed structural rebar detailer producing a CUT SHEET from construction plan pages.
+You MUST classify every single bar mark as FABRICATED (any bend, hook, L-shape, stirrup, tie, spiral, dowel with hook)
+or STOCK (perfectly straight cut from a 20' or 40' stick with zero bends).
+
+The output is a flat list of bar-mark records — one object per mark — not a summary and not totals.
+This is the same format a professional engineer uses on a REBAR-CAD BAR LIST.
 
 ══ PLAN TYPES ══
-1. REBAR SHOP DRAWINGS: Bar marks (B1, S1, T1) with size, qty, cut length, bend description. Extract all.
+1. REBAR SHOP DRAWINGS: named bar marks (B1, S1, T1, 3A01, 5A01) with size, pcs, length, bend type (T2, T3, Type 17, etc.).
 2. FOUNDATION PLANS — DRILLED PIER / GRADE BEAM (most common Texas residential):
-   - Read GENERAL NOTES carefully. Notes like "ALL GRADE BEAMS: 4-#5 CONT., #3 STIRRUPS @ 12\" O.C." apply to EVERY beam.
-   - Count total drilled piers from the plan view. Note each pier diameter and depth from the pier schedule.
-   - For each pier: extract vertical bar count/size, tie/loop bar size and spacing. Multiply by total pier count.
-   - Measure or estimate total grade beam linear footage from the plan (perimeter + interior beams).
-   - For each beam type: extract bars-per-beam from the section detail, multiply by total beam LF.
-   - Grade beam stirrups: calculate spacing interval from beam LF. E.g. 400 LF beam, stirrups @ 12\" = 400 pcs.
-3. FOUNDATION PLANS — POST-TENSION:
-   - Read PLAN LEGEND and GENERAL NOTES. Numbered circles = strand counts (NOT rebar).
-   - Conventional rebar is in general notes ("#3 bars @ 48\" O.C. each way") and beam/pier details.
-4. BEAM / PIER DETAIL SHEETS:
-   - Read EVERY section cut. Extract: bar size, qty per section, cut length or dimension, bend type.
-   - Section callouts like "4-#5 CONT." = 4 continuous #5 bars for the full beam length.
-   - "#3 @ 12\" O.C." = stirrups/ties spaced 12\" apart — calculate total count from beam length.
-5. SLAB PLANS: chair spacing, poly area, slab thickness, reinforcing notes.
+   - Read GENERAL NOTES. "ALL GRADE BEAMS: 4-#5 CONT., #3 STIRRUPS @ 12\" O.C." applies to EVERY beam.
+   - Count total drilled piers from the plan view; note each pier diameter & depth from the schedule.
+   - Pier verticals, pier ties, beam stirrups, corner bars = ALL FABRICATED (bent / hooked / looped).
+   - Grade-beam continuous top/bottom bars, slab mat bars, curb longitudinal = STOCK (straight).
+3. FOUNDATION PLANS — POST-TENSION: numbered circles = strand counts (NOT rebar). Conventional rebar lives in notes.
+4. BEAM / PIER DETAIL SHEETS: every section cut — size, pcs per section, cut length, bend type.
+5. SLAB PLANS: chair spacing, poly area, slab thickness, slab bars (usually stock straight).
 
-══ QUANTITY CALCULATION RULES (CRITICAL) ══
-- NEVER output qty=0 or cutLengthFt=0. A rough estimate is required — zero is always wrong.
-- DRILLED PIER VERTICALS: qty = bars_per_pier × total_pier_count. Cut length = pier_depth + development_length (add 2ft for hook/splice).
-- DRILLED PIER TIES/LOOPS: qty = ceil(pier_depth_ft / spacing_ft) × total_pier_count. Cut length = pier_circumference + 1ft overlap.
-- GRADE BEAM CONTINUOUS BARS: output as straightBars with totalLinearFt = bars_per_beam × total_beam_LF.
-- GRADE BEAM STIRRUPS: qty = ceil(total_beam_LF / stirrup_spacing_ft). cutLengthFt = beam_perimeter + hooks (add 1.5ft for hooks).
-- BEAM INTERSECTIONS / CORNER BARS: qty = number_of_beam_intersections × bars_per_intersection. Estimate intersections from plan view grid.
-- If plan dimensions are not visible, estimate from scale or note dimensions visible on the sheet and flag as approximate.
-- For any item where you must estimate, note "(estimated)" in the bendDescription.
+══ CLASSIFICATION RULES — MEMORIZE ══
+isFabricated = true  when the bar has ANY of: bend, hook, stirrup loop, spiral, L-shape, hairpin, Type code.
+isFabricated = false when the bar is a straight cut length only (continuous top/bottom, slab mat, curb longitudinal).
 
-══ OTHER RULES ══
-- Do NOT list PT strands as rebar.
-- Poly/vapor barrier: include mil thickness AND roll size in name (e.g. "6 mil poly 32x100"). Quantity in SF.
-- Foundation plans use DOBIE BRICKS not wire chairs. Estimate 1 dobie per 4 LF of beam.
-- Include sheet/page number in notes if visible.
-- Read ALL pages — never skip a page with details or notes.
+Typical fabricated items (bendType examples in parens):
+  • Pier verticals with top hook (Type 2 / T2)
+  • Pier tie loops / rings / spirals (Type 17 / Ring)
+  • Grade-beam stirrups (Type 3 / T3 / closed stirrup)
+  • Beam corner bars at intersections (Type 20 / L-bar)
+  • Dowels with 90° leg (T2)
+  • Slab curb L-bars (L-bar)
 
-══ DRILLED PIER EXAMPLE (so you know what to look for) ══
-Plan shows: 18 piers, 12\" dia, 10ft deep. Detail shows: 6-#5 vertical bars, #3 ties @ 12\" O.C.
-→ Pier verticals: qty = 6 × 18 = 108 pcs, cutLengthFt = 12ft (10ft + 2ft hook), bendDescription = "straight vertical w/ 90-deg hook, 12in pier"
-→ Pier ties: qty = ceil(10/1) × 18 = 180 pcs, cutLengthFt = 3.5ft (12in dia circumference + overlap), bendDescription = "closed loop tie, 12in pier @ 12in O.C."
+Typical stock (straight) items:
+  • Grade-beam continuous TOP & BOTTOM bars (CONT.)
+  • Slab mat #3 or #4 bars in a grid (each way)
+  • Curb longitudinal bars
+  • Any "cut-to-length from 20' or 40' stock" callout with no bend detail
 
-══ GRADE BEAM EXAMPLE ══
-Plan shows: ~320 LF total grade beams. General notes say: "GRADE BEAMS: 4-#5 CONT., #3 STIRRUPS @ 16\" O.C."
-→ Grade beam bars: straightBars entry, barSize=#5, totalLinearFt = 4 × 320 = 1280 LF
-→ Stirrups: qty = ceil(320 / 1.33) = 241 pcs, cutLengthFt = beam_width + beam_depth × 2 + hooks (e.g. 2.5ft), bendDescription = "stirrup, grade beam @ 16in O.C."
+══ QUANTITY CALCULATION — SHOW YOUR MATH ══
+NEVER output qty=0 or cutLengthFt=0. If you cannot read it, estimate conservatively and say so in notes.
+Put the arithmetic inline in the "math" field for every record.
 
-Return ONLY valid JSON:
+• DRILLED PIER VERTICALS (fab):     qty = bars_per_pier × pier_count.  cutLen = pier_depth + 2ft stub/hook.
+• DRILLED PIER TIES (fab):          qty = ceil(pier_depth_ft / spacing_ft) × pier_count.  cutLen = π × cage_OD + 1ft.
+• GRADE-BEAM CONTINUOUS (stock):    qty = stick_count;  cutLen = 20ft or 40ft.  totalLF = bars_per_beam × beam_LF × 1.10 (10% lap).
+• GRADE-BEAM STIRRUPS (fab):        qty = ceil(beam_LF / spacing_ft) + 1.  cutLen = 2×(inside_w + inside_h)/12 + 1ft hooks.
+• CORNER BARS (fab):                qty = intersection_count × bars_per_intersection.  cutLen = leg_A + leg_B.
+• SLAB MAT (stock):                 totalLF = 2 × floor_SF × (1 + lap%);  qty = ceil(totalLF / 20).  cutLen = 20.
+• CURB L-BARS (fab):                qty = perimeter_ft / spacing_ft;  cutLen = legA + legB (e.g. 1+1 = 2ft).
+• Estimate flags go in the record's "math" string, not as separate items.
+
+══ OTHER MATERIALS ══
+• Poly/vapor barrier: include mil thickness AND roll size in name (e.g. "6 mil poly 32x100"). Quantity in SF.
+• Foundation plans use DOBIE BRICKS, not wire chairs. Rule: 1 dobie per 4 LF of beam.
+• Anchor bolts: 1/2" × 10" at 6'-0" O.C. along exterior perimeter unless plan says otherwise.
+• Void boxes if called out: 1 per LF of beam between piers.
+• Do NOT list PT strands as rebar.
+
+══ WORKED EXAMPLE (drilled pier + grade beam) ══
+Plan: 60 piers × 12"dia × 16'deep. 3-#5 vertical per pier, #3 ties @ 24" O.C.
+Grade beams total 1,126 LF, (2)#5 CONT. top+bottom, #3 stirrups @ 24" O.C. Perimeter 298 LF.
+
+bars output:
+ { mark:"PIER-VERT", isFabricated:true,  bendType:"T2",       size:"#5", qty:180, cutLengthFt:18.0, legDims:["16'","2'"], location:"pier verticals",  math:"3 bars/pier × 60 piers = 180; 16' depth + 2' stub = 18'",  weightLb:3379 }
+ { mark:"PIER-TIE",  isFabricated:true,  bendType:"Ring",     size:"#3", qty:540, cutLengthFt:3.62, legDims:["10\"dia"],  location:"pier ties @ 24in O.C.", math:"ceil(16/2)+1 = 9 ties/pier × 60 = 540; π×(10/12)+1' = 3.62'", weightLb:735 }
+ { mark:"BEAM-CONT", isFabricated:false, bendType:"STRAIGHT", size:"#5", qty:124, cutLengthFt:20.0, legDims:[],           location:"grade beam top+bottom cont.", math:"2 bars × 1126 LF × 1.10 lap = 2479 LF; ceil(2479/20) = 124 sticks", weightLb:2586 }
+ { mark:"BEAM-STIR", isFabricated:true,  bendType:"T3",       size:"#3", qty:565, cutLengthFt:5.67, legDims:["8\"","20\""], location:"grade beam stirrups @ 24in O.C.", math:"1126/2 + 1 = 565; 2×(8+20)/12 + 1' hooks = 5.67'", weightLb:1204 }
+ { mark:"CORNER",    isFabricated:true,  bendType:"T20",      size:"#5", qty:112, cutLengthFt:4.0,  legDims:["2'","2'"],  location:"beam intersections 2 ea", math:"56 intersections × 2 = 112; 24\"+24\" legs = 4.0'", weightLb:467 }
+
+══ OUTPUT FORMAT ══
+Return ONLY valid JSON — no prose, no markdown fences:
 {
   "projectName": "name from title block, else null",
-  "notes": ["sheet F1 — drilled pier foundation", "18 piers 12in dia 10ft deep", "~320 LF total grade beams"],
-  "straightBars": [
-    {"barSize": "#5", "totalLinearFt": 1280, "location": "grade beam continuous bars, 4 per beam x 320 LF"}
-  ],
-  "fabBars": [
-    {"mark": "PIER-VERT", "barSize": "#5", "qty": 108, "cutLengthFt": 12, "bendDescription": "straight vertical w/ 90-deg hook, 12in pier, (18 piers x 6 bars)"},
-    {"mark": "PIER-TIE", "barSize": "#3", "qty": 180, "cutLengthFt": 3.5, "bendDescription": "closed loop tie 12in pier @ 12in O.C., (18 piers x 10 ties)"},
-    {"mark": "BEAM-STIRRUP", "barSize": "#3", "qty": 241, "cutLengthFt": 2.5, "bendDescription": "stirrup grade beam 16in O.C., 320 LF total"}
+  "notes": ["sheet F1 — drilled pier foundation", "60 piers 12\" dia 16' deep", "1126 LF total beams"],
+  "bars": [
+    {
+      "mark": "PIER-VERT",
+      "isFabricated": true,
+      "bendType": "T2",
+      "size": "#5",
+      "qty": 180,
+      "cutLengthFt": 18.0,
+      "legDims": ["16'","2'"],
+      "location": "pier verticals",
+      "math": "3 bars/pier × 60 piers = 180",
+      "weightLb": 3379
+    }
   ],
   "otherMaterials": [
-    {"name": "6 mil poly 32x100", "qty": 2400, "unit": "SF"},
-    {"name": "dobie brick", "qty": 80, "unit": "EA"}
+    {"name": "6 mil poly 32x100", "qty": 6161, "unit": "SF"},
+    {"name": "dobie brick",       "qty": 282,  "unit": "EA"}
   ]
-}`;
+}
+
+REMEMBER: every bar record MUST have isFabricated set to a boolean. No nulls, no "maybe".`;
 
 // ── Pass 2 prompt: consolidation ──────────────────────────────────────────────
-// Takes all chunk JSONs as input, produces the final complete cut sheet.
+// Takes all chunk JSONs as input, deduplicates bar marks, splits into fab vs stock,
+// and returns the final cut sheet in the engineer's format.
 function buildPass2Prompt(chunkDataJson: string): string {
-  return `You are a structural rebar estimator. You have received raw takeoff data extracted from ${JSON.parse(chunkDataJson).length} sections of a plan set.
+  return `You are a structural rebar estimator consolidating raw takeoff data from ${JSON.parse(chunkDataJson).length} section(s) of a plan set.
 
-Your job is to consolidate this data into a single accurate cut sheet:
-1. MERGE duplicate bar marks across sections — if B1 appears in multiple sections, sum the quantities.
-2. TOTAL all straight bars by size — sum all totalLinearFt for each bar size.
-3. PRESERVE all unique fab bar marks with their full specs.
-4. COMBINE other materials by type.
-5. Use the project name from the first section that has one.
+Your job is to produce the FINAL cut sheet in the format a professional detailer uses:
+ • One line item "Fabrication-1" that rolls up ALL bent bars by total weight @ $0.75/lb
+ • Separate stock-bar line items for every straight bar group (e.g. "Rebar #5 20'" × N sticks)
+ • Other materials grouped by type
+
+══ CONSOLIDATION RULES ══
+1. DEDUPLICATE bar marks across chunks. If mark "3A01" appears in multiple chunks with matching size+location,
+   treat them as the SAME bars — pick the chunk with the most detail, DO NOT add quantities together.
+2. SUM quantities only when the same mark legitimately spans multiple sections (e.g. a mark that
+   appears on two separate detail sheets for two different wings of a building).
+3. CLASSIFY each bar into the correct bucket using the isFabricated flag from Pass 1:
+     isFabricated === true  → fabricatedBars[]   (goes to Fabrication-1 line)
+     isFabricated === false → stockBars[]        (goes to stock bar line items)
+   If Pass 1 left isFabricated unset, infer it: any bar whose description mentions
+   bend, hook, stirrup, tie, loop, ring, spiral, L-bar, corner, hairpin, or any "Type N" code
+   is fabricated. Straight continuous bars, slab mat, curb longitudinal are stock.
+4. STOCK BAR GROUPING: group stock bars by (size, preferred_stock_length).
+     Use 20' sticks unless any single cut length in the group exceeds 19' → then use 40'.
+     stickCount = ceil(totalLinearFt_for_that_group / stock_length_ft). Always round UP.
+5. Sum Fabrication-1 total: totalFabWeight = Σ (qty × cutLengthFt × lb/ft) across all fabricatedBars.
+6. Use the projectName from the first chunk that provides one.
 
 Here is the raw chunk data:
 ${chunkDataJson}
 
 BAR WEIGHTS (lb/ft): #3=0.376, #4=0.668, #5=1.043, #6=1.502, #7=2.044, #8=2.670, #9=3.400, #10=4.303, #11=5.313
 
-For standardRebar: use "totalLinearFt" when you have linear feet, OR use "qty" when the plan shows a piece count (e.g. "25 pcs #3 20'"). Do NOT convert — pass through exactly what the plan states.
-
-Return ONLY valid JSON in this exact format:
+══ REQUIRED OUTPUT FORMAT (valid JSON only) ══
 {
-  "projectName": "Ascension Cottages",
-  "notes": ["summary notes about the plan set"],
-  "standardRebar": [
-    {"barSize": "#5", "totalLinearFt": 840},
-    {"barSize": "#3", "qty": 25}
+  "projectName": "Crystal Perez Residence",
+  "notes": ["60 piers, 1126 LF beams", "FLAG: interior beam count estimated"],
+  "fabricatedBars": [
+    {"mark":"PIER-VERT", "size":"#5", "qty":180, "cutLengthFt":18.0, "bendType":"T2",   "legDims":["16'","2'"],  "location":"pier verticals",         "weightLb":3379},
+    {"mark":"PIER-TIE",  "size":"#3", "qty":540, "cutLengthFt":3.62, "bendType":"Ring", "legDims":["10\\"dia"],   "location":"pier ties",              "weightLb":735},
+    {"mark":"BEAM-STIR", "size":"#3", "qty":565, "cutLengthFt":5.67, "bendType":"T3",   "legDims":["8\\"","20\\""],"location":"grade beam stirrups",   "weightLb":1204},
+    {"mark":"CORNER",    "size":"#5", "qty":112, "cutLengthFt":4.0,  "bendType":"T20",  "legDims":["2'","2'"],    "location":"beam intersections",     "weightLb":467}
   ],
-  "fabRebar": [
-    {"mark": "B1", "barSize": "#4", "qty": 48, "cutLengthFt": 5.5, "bendDescription": "90-deg hook both ends, 4in legs"}
+  "stockBars": [
+    {"size":"#5", "stockLengthFt":20, "cutLengthFt":20, "totalLinearFt":2479, "stickCount":124, "location":"grade beam top+bottom cont.",  "weightLb":2586},
+    {"size":"#3", "stockLengthFt":20, "cutLengthFt":20, "totalLinearFt":12322,"stickCount":617, "location":"slab mat #3 @ 12\\" grid",      "weightLb":4633}
   ],
+  "fabTotalWeightLb": 5785,
   "otherMaterials": [
-    {"name": "6 mil poly 32x100", "qty": 4000, "unit": "SF"}
+    {"name":"6 mil poly 32x100", "qty":6161, "unit":"SF"},
+    {"name":"dobie brick",       "qty":282,  "unit":"EA"}
   ]
-}`;
+}
+
+Do NOT return the old schema (standardRebar / fabRebar). Use the new keys above: fabricatedBars, stockBars, fabTotalWeightLb, otherMaterials.`;
 }
 
 // ── Helper: call Responses API with inline base64 PDF ────────────────────────
@@ -419,80 +469,214 @@ async function runConsolidationPass(client: OpenAI, chunkRaws: any[]): Promise<a
   return {};
 }
 
+// ── Back-compat: accept either old schema (standardRebar/fabRebar)
+//    or new schema (stockBars/fabricatedBars). Normalize to new shape. ────────
+function normalizeToNewSchema(c: any): {
+  projectName: string;
+  notes: string[];
+  fabricatedBars: any[];
+  stockBars: any[];
+  fabTotalWeightLb?: number;
+  otherMaterials: any[];
+} {
+  const notes: string[] = c.notes || [];
+  const projectName: string = c.projectName || "Customer Takeoff";
+  const otherMaterials: any[] = c.otherMaterials || [];
+
+  // Already new schema
+  if (Array.isArray(c.fabricatedBars) || Array.isArray(c.stockBars)) {
+    return {
+      projectName, notes,
+      fabricatedBars: c.fabricatedBars || [],
+      stockBars: c.stockBars || [],
+      fabTotalWeightLb: c.fabTotalWeightLb,
+      otherMaterials,
+    };
+  }
+
+  // Pass-1 "bars[]" flat list — split by isFabricated
+  if (Array.isArray(c.bars)) {
+    const fab = c.bars.filter((b: any) => b.isFabricated === true);
+    const stock = c.bars.filter((b: any) => b.isFabricated === false).map((b: any) => {
+      const cutLen = parseFloat(b.cutLengthFt) || 20;
+      const qty = parseInt(b.qty) || 0;
+      return {
+        size: b.size || b.barSize || "#4",
+        stockLengthFt: cutLen > 19 ? 40 : 20,
+        cutLengthFt: cutLen,
+        totalLinearFt: qty * cutLen,
+        stickCount: qty,
+        location: b.location || "",
+        weightLb: b.weightLb,
+      };
+    });
+    return { projectName, notes, fabricatedBars: fab.map((b: any) => ({ ...b, size: b.size || b.barSize })), stockBars: stock, otherMaterials };
+  }
+
+  // Legacy schema — standardRebar + fabRebar
+  const fabricatedBars: any[] = (c.fabRebar || []).map((fr: any) => ({
+    mark: fr.mark,
+    size: fr.barSize,
+    qty: parseInt(fr.qty) || 0,
+    cutLengthFt: parseFloat(fr.cutLengthFt) || 0,
+    bendType: fr.bendType,
+    legDims: fr.legDims,
+    location: fr.bendDescription || fr.location,
+  }));
+  const stockBars: any[] = (c.standardRebar || []).map((sr: any) => {
+    const barSize = sr.barSize || "#4";
+    const stockLen = 20;
+    let stickCount: number;
+    let totalLF: number;
+    if (sr.qty && !sr.totalLinearFt) {
+      stickCount = parseInt(sr.qty) || 1;
+      totalLF = stickCount * stockLen;
+    } else {
+      totalLF = parseFloat(sr.totalLinearFt) || 0;
+      stickCount = Math.ceil(totalLF / stockLen);
+    }
+    return { size: barSize, stockLengthFt: stockLen, cutLengthFt: stockLen, totalLinearFt: totalLF, stickCount, location: sr.location || "" };
+  });
+  return { projectName, notes, fabricatedBars, stockBars, otherMaterials };
+}
+
+// ── Render the engineer-style cut sheet table as plain text ─────────────────
+function renderCutSheetTable(fab: any[], stock: any[], fabTotalLb: number, stockTotalLb: number): string[] {
+  const lines: string[] = [];
+  const bar = "─".repeat(67);
+  lines.push("REBAR CUT SHEET");
+  lines.push(bar);
+  lines.push("Mark       Qty   Size  Cut Len    Type            Weight");
+  for (const b of fab) {
+    const mark = String(b.mark || "").padEnd(10).slice(0, 10);
+    const qty = String(b.qty ?? "").padStart(5);
+    const size = String(b.size || "").padEnd(5).slice(0, 5);
+    const len = String(b.cutLengthFt ?? "").padEnd(10).slice(0, 10);
+    const typ = `${b.bendType || "bent"} (fab)`.padEnd(15).slice(0, 15);
+    const wt = `${Math.round(b.weightLb ?? 0)} lb`;
+    lines.push(`${mark} ${qty}  ${size} ${len} ${typ} ${wt}`);
+  }
+  if (stock.length) {
+    lines.push("[STRAIGHT / STOCK]");
+    for (const s of stock) {
+      const mark = `STK-${String(s.size || "").replace("#", "")}`.padEnd(10).slice(0, 10);
+      const qty = String(s.stickCount ?? "").padStart(5);
+      const size = String(s.size || "").padEnd(5).slice(0, 5);
+      const len = `${s.cutLengthFt || s.stockLengthFt || 20}'`.padEnd(10).slice(0, 10);
+      const typ = "STRAIGHT".padEnd(15);
+      const wt = `${Math.round(s.weightLb ?? 0)} lb`;
+      lines.push(`${mark} ${qty}  ${size} ${len} ${typ} ${wt}`);
+    }
+  }
+  lines.push(bar);
+  lines.push(`FAB TOTAL:   ${Math.round(fabTotalLb).toLocaleString()} lb  →  Fabrication-1 @ $0.75/lb`);
+  lines.push(`STOCK TOTAL: ${Math.round(stockTotalLb).toLocaleString()} lb  →  stock bar line items`);
+  lines.push(bar);
+  return lines;
+}
+
 // ── Build line items + fab items from consolidated cut sheet ─────────────────
 function buildFromCutSheet(consolidated: any, products: Product[]): TakeoffResult {
   const lineItems: LineItem[] = [];
   const fabItems: FabItem[] = [];
-  const takeoffNotes: string[] = consolidated.notes || [];
-  const projectName: string = consolidated.projectName || "Customer Takeoff";
 
-  // ── Standard (straight stock) rebar ──────────────────────────────────────
-  for (const sr of (consolidated.standardRebar || [])) {
-    const barSize: string = sr.barSize || "#4";
-    const stockLen = 20;
-    const weightPerFt = BAR_WEIGHT[barSize] ?? 0.668;
+  const norm = normalizeToNewSchema(consolidated);
+  const takeoffNotes: string[] = [...norm.notes];
+  const projectName = norm.projectName;
 
-    // GPT may return totalLinearFt (LF) OR qty (pieces) OR both
-    let stockBarsNeeded: number;
-    let totalLF: number;
-    if (sr.qty && !sr.totalLinearFt) {
-      // Plan showed piece count directly (e.g. "25 pcs #3 20'")
-      stockBarsNeeded = parseInt(sr.qty) || 1;
-      totalLF = stockBarsNeeded * stockLen;
+  // ── STOCK BARS: one line item per (size, stockLength) group ───────────────
+  // Re-group in case Pass 2 left multiple entries for the same (size, stockLen).
+  const stockGroups = new Map<string, { size: string; stockLen: number; totalLF: number; stickCount: number; weightLb: number; locations: string[] }>();
+  for (const s of norm.stockBars) {
+    const size: string = s.size || "#4";
+    const cutLen = parseFloat(s.cutLengthFt) || 0;
+    const stockLen = parseFloat(s.stockLengthFt) || (cutLen > 19 ? 40 : 20);
+    const weightPerFt = BAR_WEIGHT[size] ?? 0.668;
+    const totalLF = parseFloat(s.totalLinearFt) || ((parseInt(s.stickCount) || 0) * stockLen);
+    const sticks = parseInt(s.stickCount) || Math.ceil(totalLF / stockLen);
+    const weightLb = typeof s.weightLb === "number" ? s.weightLb : Math.round(totalLF * weightPerFt * 100) / 100;
+    const key = `${size}|${stockLen}`;
+    const g = stockGroups.get(key);
+    if (g) {
+      g.totalLF += totalLF;
+      g.stickCount += sticks;
+      g.weightLb += weightLb;
+      if (s.location) g.locations.push(s.location);
     } else {
-      totalLF = parseFloat(sr.totalLinearFt) || 0;
-      stockBarsNeeded = Math.ceil(totalLF / stockLen);
+      stockGroups.set(key, { size, stockLen, totalLF, stickCount: sticks, weightLb, locations: s.location ? [s.location] : [] });
     }
+  }
 
-    const totalWeight = Math.round(totalLF * weightPerFt * 100) / 100;
-    const desc = `${barSize} - ${stockBarsNeeded} bars @ 20' - ${totalLF} LF total - ${totalWeight} lbs`;
-
-    const matched = matchProduct(sr.productName || barSize, stockBarsNeeded, "EA", products);
+  let stockTotalLb = 0;
+  const normalizedStockForTable: any[] = [];
+  for (const g of stockGroups.values()) {
+    stockTotalLb += g.weightLb;
+    const name = `Rebar ${g.size} ${g.stockLen}'`;
+    const desc = `${g.stickCount} stick(s) @ ${g.stockLen}' - ${Math.round(g.totalLF)} LF - ${Math.round(g.weightLb)} lb${g.locations.length ? ` - ${g.locations.join("; ")}` : ""}`;
+    const matched = matchProduct(name, g.stickCount, "EA", products);
     if (matched) {
       lineItems.push({ ...matched, description: desc });
     } else {
-      lineItems.push({ qboItemId: "CUSTOM", name: `${barSize} Rebar (20' stock)`, description: desc, qty: stockBarsNeeded, unitPrice: 0, amount: 0 });
+      lineItems.push({ qboItemId: "CUSTOM", name, description: desc, qty: g.stickCount, unitPrice: 0, amount: 0 });
     }
     fabItems.push({
-      mark: `S-${barSize.replace("#", "")}`,
-      barSize, qty: stockBarsNeeded, lengthFt: stockLen,
-      totalLF: stockBarsNeeded * stockLen, weightLbs: totalWeight,
+      mark: `STK-${g.size.replace("#", "")}-${g.stockLen}`,
+      barSize: g.size, qty: g.stickCount, lengthFt: g.stockLen,
+      totalLF: g.totalLF, weightLbs: Math.round(g.weightLb * 100) / 100,
       bendDescription: "Straight stock length",
-      stockLengthFt: stockLen, barsPerStock: 1, stockBarsNeeded,
+      stockLengthFt: g.stockLen, barsPerStock: 1, stockBarsNeeded: g.stickCount,
     });
+    normalizedStockForTable.push({ size: g.size, stockLengthFt: g.stockLen, cutLengthFt: g.stockLen, stickCount: g.stickCount, weightLb: g.weightLb });
   }
 
-  // ── Fabricated rebar ──────────────────────────────────────────────────────
-  for (const fr of (consolidated.fabRebar || [])) {
-    if (!fr.barSize) continue; // skip malformed entries
-    const barSize: string = fr.barSize || "#4";
+  // ── FABRICATED BARS: collect weights + emit fabItems, single Fabrication-1 line at end ──
+  let fabTotalLb = 0;
+  const fabForTable: any[] = [];
+  const fabProduct = products.find(p => p.name.toLowerCase().includes("fabrication-1") || p.name.toLowerCase() === "fabrication-1");
+
+  for (const fr of norm.fabricatedBars) {
+    const barSize: string = fr.size || fr.barSize || "#4";
     const qty: number = parseInt(fr.qty) || 0;
     const cutLengthFt: number = parseFloat(fr.cutLengthFt) || 0;
-    if (qty === 0 || cutLengthFt === 0) {
-      // Can't price without qty and length — add as a CUSTOM note item
-      lineItems.push({ qboItemId: "CUSTOM", name: `${barSize} fab bar (${fr.mark || fr.bendDescription || "see plans"})`, description: `Qty/length TBD — verify from plans`, qty: 0, unitPrice: 0.75, amount: 0 });
-      continue;
-    }
+    if (qty === 0 || cutLengthFt === 0) continue;
     const weightPerFt = BAR_WEIGHT[barSize] ?? 0.668;
     const totalLF = qty * cutLengthFt;
-    const totalWeight = Math.round(totalLF * weightPerFt * 100) / 100;
-    const priceLbs = Math.round(totalWeight * 0.75 * 100) / 100;
+    const weightLb = typeof fr.weightLb === "number" ? fr.weightLb : Math.round(totalLF * weightPerFt * 100) / 100;
+    fabTotalLb += weightLb;
     const { barsPerStock, stockBarsNeeded } = calcStockBars(barSize, qty, cutLengthFt);
     const mark = fr.mark || `F${fabItems.length + 1}`;
-    const bendDesc = fr.bendDescription || "Custom bend";
-    const desc = `Mark: ${mark} | ${barSize} | Qty: ${qty} pc | Cut length: ${cutLengthFt}' | ${bendDesc} | ${totalWeight} lbs total`;
+    const bendDesc = fr.location || fr.bendDescription || fr.bendType || "Custom bend";
+    fabItems.push({
+      mark, barSize, qty, lengthFt: cutLengthFt,
+      totalLF, weightLbs: Math.round(weightLb * 100) / 100,
+      bendDescription: `${fr.bendType ? fr.bendType + " — " : ""}${bendDesc}`,
+      stockLengthFt: 20, barsPerStock, stockBarsNeeded,
+    });
+    fabForTable.push({ mark, size: barSize, qty, cutLengthFt, bendType: fr.bendType, weightLb });
+  }
 
-    const fabProduct = products.find(p => p.name.toLowerCase().includes("fabrication-1") || p.name.toLowerCase() === "fabrication-1");
+  // Fabrication-1 uses Pass 2's pre-summed weight when present; else use our recomputed total.
+  const fabLbForBilling = typeof norm.fabTotalWeightLb === "number" && norm.fabTotalWeightLb > 0
+    ? norm.fabTotalWeightLb
+    : Math.round(fabTotalLb * 100) / 100;
+
+  if (fabLbForBilling > 0) {
+    const priceLbs = Math.round(fabLbForBilling * 0.75 * 100) / 100;
+    const markList = fabForTable.map(f => f.mark).slice(0, 12).join(", ");
+    const desc = `Total fabricated (bent) bars: ${Math.round(fabLbForBilling).toLocaleString()} lb @ $0.75/lb. Marks: ${markList}${fabForTable.length > 12 ? ", ..." : ""}`;
     lineItems.push({
       qboItemId: fabProduct?.qboItemId || "FAB-1",
       name: "Fabrication-1",
       description: desc,
-      qty: totalWeight,
+      qty: fabLbForBilling,
       unitPrice: 0.75,
       amount: priceLbs,
     });
-    fabItems.push({ mark, barSize, qty, lengthFt: cutLengthFt, totalLF, weightLbs: totalWeight, bendDescription: bendDesc, stockLengthFt: 20, barsPerStock, stockBarsNeeded });
   }
+
+  // Emit the cut-sheet table into takeoffNotes
+  const tableLines = renderCutSheetTable(fabForTable, normalizedStockForTable, fabLbForBilling, stockTotalLb);
+  takeoffNotes.push(...tableLines);
 
   // ── Other materials ───────────────────────────────────────────────────────
   for (const om of (consolidated.otherMaterials || [])) {
