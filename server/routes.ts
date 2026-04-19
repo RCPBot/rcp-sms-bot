@@ -178,7 +178,9 @@ export function registerRoutes(httpServer: Server, app: Express) {
       if (newMedia.length > 0) {
         const _parsedExisting = conv.pendingImagesJson ? JSON.parse(conv.pendingImagesJson) : [];
         const existing: string[] = Array.isArray(_parsedExisting) ? _parsedExisting : [];
-        const merged = [...existing, ...newMedia];
+        // Deduplicate — never store the same URL twice (prevents duplicate takeoff on retry)
+        const merged = [...existing];
+        for (const u of newMedia) { if (!merged.includes(u)) merged.push(u); }
         conv = storage.updateConversation(conv.id, { pendingImagesJson: JSON.stringify(merged) });
         console.log(`[Images] Stored ${mediaUrls.length} image(s) + ${pdfUrls.length} PDF(s) — total pending: ${merged.length}`);
       }
@@ -625,10 +627,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
     const conv = storage.getConversation(conversationId);
     if (!conv) return;
 
-    const usingPerplexity = !!(planSourceUrl && process.env.PERPLEXITY_API_KEY);
-    const ackMsg = usingPerplexity
-      ? `Got it! Running a full AI takeoff on your plan set now. This takes about 30–60 seconds — I’ll send your estimate as soon as it’s ready.`
-      : `Got it! I'm analyzing your plan set now. This takes about 30 seconds — I'll send your estimate as soon as it's ready.`;
+    const ackMsg = `Got it! I'm analyzing your plan set now. This takes about 30–60 seconds — I'll send your estimate as soon as it's ready.`;
     storage.addMessage({ conversationId, direction: "outbound", body: ackMsg });
     await sendSms(phone, ackMsg);
 
@@ -644,8 +643,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
           : `I couldn't extract materials from those images. Make sure all pages are clear and in focus. Try resending or call us at 469-631-7730 for a manual quote.`;
         console.error(`[Takeoff] Zero line items — imageUrls: ${JSON.stringify(imageUrls.map(u => u.substring(0,80)))}`);
         storage.addMessage({ conversationId, direction: "outbound", body: errMsg });
-        await sendSms(cleanPhone, errMsg);
-        storage.updateConversation(conversationId, { stage: "ordering" });
+        await sendSms(phone, errMsg);
         storage.updateConversation(conversationId, { stage: "ordering" });
         return;
       }
@@ -715,7 +713,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
       if (pricedItems.length === 0) {
         const noPrice = `We were able to identify the materials in your plan set but couldn't determine quantities automatically. Please call us at 469-631-7730 and we'll put together a manual quote for you.\n\nItems identified:\n${unpricedItems.map(i => `- ${i.name}`).join("\n")}`;
         storage.addMessage({ conversationId, direction: "outbound", body: noPrice });
-        await sendSms(cleanPhone, noPrice);
+        await sendSms(phone, noPrice);
         storage.updateConversation(conversationId, { stage: "ordering" });
         return;
       }
@@ -752,7 +750,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
       console.error("[Takeoff] Error:", err);
       const errMsg = `Something went wrong while reading your plan set. Please call us at 469-631-7730 and we\'ll get you a quote right away — usually within the hour.`;
       storage.addMessage({ conversationId, direction: "outbound", body: errMsg });
-      await sendSms(cleanPhone, errMsg);
+      await sendSms(phone, errMsg);
       storage.updateConversation(conversationId, { stage: "ordering" });
     }
   }

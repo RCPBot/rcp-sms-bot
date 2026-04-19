@@ -556,16 +556,10 @@ export async function performTakeoff(
   products: Product[],
   planSourceUrl?: string
 ): Promise<TakeoffResult> {
-  // ── sonar-pro path: use when we have a real external URL ─────────────────
-  if (planSourceUrl && process.env.PERPLEXITY_API_KEY) {
-    console.log(`[Takeoff] sonar-pro path — planSourceUrl: ${planSourceUrl.substring(0, 80)}`);
-    try {
-      return await performSonarTakeoff(planSourceUrl, products);
-    } catch (err: any) {
-      console.error(`[Takeoff] sonar-pro failed (${err?.message}) — falling back to GPT-4o pipeline`);
-      // Fall through to existing pipeline below
-    }
-  }
+  // sonar-pro is a web search model — it cannot fetch private Dropbox/Drive download URLs.
+  // Construction plans are image-based PDFs that must be read via GPT-4o Responses API inline base64.
+  // The planSourceUrl is preserved for future use (e.g. public web-hosted plan pages).
+  // All plan takeoffs route through the GPT-4o two-pass pipeline below.
 
   const pdfUrls = mediaItems.filter(u => u.startsWith("pdf::")).map(u => u.slice(5));
   const imageUrls = mediaItems.filter(u => !u.startsWith("pdf::") && !u.startsWith("__"));
