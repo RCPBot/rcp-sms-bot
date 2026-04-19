@@ -134,11 +134,11 @@ async function qboPost(path: string, body: object) {
 
 // Post with automatic DocNumber retry on duplicate (QBO error code 6140)
 async function qboPostWithDocRetry(path: string, body: Record<string, any>): Promise<any> {
-  const MAX_RETRIES = 20;
+  const MAX_RETRIES = 100;
   let attempt = 0;
   let currentDoc: string = body.DocNumber || "";
 
-  while (attempt < MAX_RETRIES) {
+  while (attempt < 100) {
     try {
       return await qboPost(path, { ...body, ...(currentDoc ? { DocNumber: currentDoc } : {}) });
     } catch (err: any) {
@@ -511,31 +511,33 @@ export async function convertEstimateToInvoice(qboEstimateId: string, customerEm
 // ── Get next sequential DocNumber for invoices or estimates ────────────────────
 async function getNextDocNumber(type: "Invoice" | "Estimate"): Promise<string> {
   try {
-    // QBO SQL uses 'ORDER BY' with a space, not 'ORDERBY'
-    const query = encodeURIComponent(`SELECT * FROM ${type} ORDER BY DocNumber DESC MAXRESULTS 1`);
-    const data = await qboGet(`/query?query=${query}`);
-    console.log(`[QBO] getNextDocNumber(${type}) raw response:`, JSON.stringify(data?.QueryResponse || {}));
-    const items: any[] = data.QueryResponse?.[type] || [];
-    if (items.length > 0) {
-      const last = items[0].DocNumber || "";
-      console.log(`[QBO] getNextDocNumber(${type}) last DocNumber: ${last}`);
-      const match = last.match(/(\d+)$/);
-      if (match) {
-        const maxNum = parseInt(match[1], 10);
-        if (!isNaN(maxNum)) {
-          const prefix = last.slice(0, last.length - match[1].length);
-          const next = `${prefix}${maxNum + 1}`;
-          console.log(`[QBO] getNextDocNumber(${type}) -> ${next}`);
-          return next;
+    let maxNum = 0;
+    let startPos = 1;
+    const pageSize = 100;
+    while (true) {
+      const query = encodeURIComponent(
+        `SELECT DocNumber FROM ${type} STARTPOSITION ${startPos} MAXRESULTS ${pageSize}`
+      );
+      const data = await qboGet(`/query?query=${query}`);
+      const items: any[] = data.QueryResponse?.[type] || [];
+      if (!items.length) break;
+      for (const item of items) {
+        const match = (item.DocNumber || "").match(/(\d+)$/);
+        if (match) {
+          const n = parseInt(match[1], 10);
+          if (n > maxNum) maxNum = n;
         }
       }
+      if (items.length < pageSize) break; // last page
+      startPos += pageSize;
     }
-  } catch (err: any) {
-    console.error(`[QBO] Failed to fetch max DocNumber for ${type}:`, err?.message);
+    const next = maxNum > 0 ? String(maxNum + 1) : type === "Invoice" ? "20000" : "30000";
+    console.log(`[QBO] getNextDocNumber(${type}): maxNum=${maxNum}, next=${next}`);
+    return next;
+  } catch (err) {
+    console.error(`[QBO] getNextDocNumber failed:`, err);
+    return type === "Invoice" ? "20000" : "30000";
   }
-  // Fallback: start high enough to avoid collisions with existing QBO docs
-  console.warn(`[QBO] getNextDocNumber(${type}) falling back to 20000`);
-  return "20000";
 }
 
 // ── Get recent invoices for a customer ──────────────────────────────────────
