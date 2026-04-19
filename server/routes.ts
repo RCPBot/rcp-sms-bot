@@ -356,6 +356,10 @@ export function registerRoutes(httpServer: Server, app: Express) {
         const id = String(item.qboItemId || "");
         return id && id !== "null" && id !== "" && /^\d+$/.test(id);
       });
+      // Recompute amount from qty × unitPrice to avoid floating-point mismatch QBO rejects
+      validItems.forEach((item: any) => {
+        item.amount = Math.round(item.qty * item.unitPrice * 100) / 100;
+      });
       console.log("[Order] Valid line items after filter:", JSON.stringify(validItems));
       if (validItems.length === 0) {
         console.error("[Order] No line items with valid qboItemId — falling back to pending order");
@@ -536,6 +540,10 @@ export function registerRoutes(httpServer: Server, app: Express) {
       if (qboCustomerId && isQboConfigured()) {
         // Separate matched QBO items from unmatched (CUSTOM) items
         const qboLineItems = takeoffResult.lineItems.filter(i => i.qboItemId !== "CUSTOM");
+        // Recompute amount to avoid floating-point mismatches QBO rejects
+        qboLineItems.forEach(item => {
+          item.amount = Math.round(item.qty * item.unitPrice * 100) / 100;
+        });
         const customItems = takeoffResult.lineItems.filter(i => i.qboItemId === "CUSTOM");
         if (customItems.length > 0) {
           console.log(`[Takeoff] ${customItems.length} unmatched item(s) moved to memo:`, customItems.map(i => i.name).join(", "));
