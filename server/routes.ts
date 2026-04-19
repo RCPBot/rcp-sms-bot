@@ -4,7 +4,7 @@ import express from "express";
 import { storage } from "./storage";
 import { sendSms, isTwilioConfigured, sendPaymentLinkEmail } from "./sms";
 import { processMessage, extractOrderFromConversation, extractCustomerInfo, isAiConfigured } from "./ai";
-import { syncProducts, findOrCreateCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices } from "./qbo";
+import { syncProducts, findOrCreateCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice } from "./qbo";
 import { performTakeoff } from "./takeoff";
 import { resolveLinksFromText } from "./link-resolver";
 import { generateCutSheetPdf, emailCutSheet } from "./cutsheet";
@@ -704,7 +704,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
     setTimeout(check, attempt === 0 ? 30_000 : INTERVAL_MS);
   }
 
-  // ── Handle approved estimate: generate + email cut sheet ────────────────────
+  // ── Handle approved estimate: convert to invoice, email cut sheet, send payment link ──
   async function handleEstimateApproval(
     estimateDbId: number,
     conversationId: number,
@@ -719,33 +719,80 @@ export function registerRoutes(httpServer: Server, app: Express) {
       const fabItems = JSON.parse(est.fabricationJson || "[]");
       const estimateNumber = est.qboEstimateNumber || String(estimateDbId);
       const customerName = conv.customerName || conv.phone;
+      const customerEmail = conv.customerEmail || "";
 
-      const pdfPath = generateCutSheetPdf({
-        projectName,
-        customerName,
-        estimateNumber,
-        fabItems,
-      });
+      // 1. Convert QBO estimate → invoice
+      let invoiceNumber = estimateNumber;
+      let paymentLink: string | null = null;
+      if (est.qboEstimateId && isQboConfigured()) {
+        try {
+          const converted = await convertEstimateToInvoice(est.qboEstimateId, customerEmail);
+          invoiceNumber = converted.invoiceNumber;
+          paymentLink = converted.paymentLink;
+          console.log(`[Estimate] Converted estimate ${estimateNumber} → invoice ${invoiceNumber}`);
+        } catch (convErr) {
+          console.error("[Estimate] Failed to convert estimate to invoice:", convErr);
+        }
+      }
 
-      const emailed = await emailCutSheet({
-        pdfPath,
-        projectName,
-        customerName,
-        estimateNumber,
-        ownerEmail: OWNER_EMAIL,
-      });
+      // 2. Generate + email fabrication cut sheet (if there are fab items)
+      if (fabItems.length > 0) {
+        try {
+          const pdfPath = generateCutSheetPdf({
+            projectName,
+            customerName,
+            estimateNumber: invoiceNumber,
+            fabItems,
+          });
+          await emailCutSheet({
+            pdfPath,
+            projectName,
+            customerName,
+            estimateNumber: invoiceNumber,
+            ownerEmail: OWNER_EMAIL,
+          });
+        } catch (pdfErr) {
+          console.error("[Estimate] Cut sheet generation/email failed:", pdfErr);
+        }
+      }
 
       storage.updateEstimate(estimateDbId, {
         status: "approved",
-        cutSheetEmailedAt: emailed ? new Date() : undefined,
+        cutSheetEmailedAt: new Date(),
       });
 
-      const confirmMsg = `Your estimate has been approved! Our team has your fabrication cut sheet and will begin processing your order shortly. Thank you for choosing Rebar Concrete Products!`;
+      // 3. Send customer confirmation + payment link
+      let confirmMsg: string;
+      if (paymentLink) {
+        confirmMsg = `Estimate approved! Invoice #${invoiceNumber} has been created.\n\nPay here:\n${paymentLink}\n\nWe'll also email the invoice to ${customerEmail}. Thank you for choosing Rebar Concrete Products!`;
+      } else {
+        confirmMsg = `Estimate approved! Invoice #${invoiceNumber} has been created and emailed to ${customerEmail}. Our team will begin processing your order. Thank you!`;
+      }
+
       storage.addMessage({ conversationId, direction: "outbound", body: confirmMsg });
-      await sendSms(phone, confirmMsg);
+      const smsSent = await sendSms(phone, confirmMsg);
+
+      // Email fallback if SMS fails
+      if (!smsSent && paymentLink && customerEmail) {
+        try {
+          await sendPaymentLinkEmail({
+            to: customerEmail,
+            customerName,
+            invoiceNumber,
+            paymentLink,
+            total: 0,
+          });
+        } catch (_) {}
+      }
+
       storage.updateConversation(conversationId, { stage: "invoiced", status: "completed" });
     } catch (err) {
       console.error("[Estimate] Approval handler failed:", err);
+      try {
+        const errMsg = "There was an issue processing your approval. Please call us at 469-631-7730 and we'll take care of you.";
+        storage.addMessage({ conversationId, direction: "outbound", body: errMsg });
+        await sendSms(phone, errMsg);
+      } catch (_) {}
     }
   }
 

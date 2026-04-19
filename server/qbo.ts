@@ -356,6 +356,75 @@ export async function getEstimateStatus(estimateId: string): Promise<string> {
   }
 }
 
+// ── Convert an approved estimate to an invoice ───────────────────────────────
+export async function convertEstimateToInvoice(qboEstimateId: string, customerEmail: string): Promise<{
+  invoiceId: string;
+  invoiceNumber: string;
+  paymentLink: string | null;
+}> {
+  // QBO v3 API: POST /estimate/{id}?operation=convert to create an invoice from an estimate
+  const { realmId } = cfg();
+  const token = await getAccessToken();
+  const res = await fetch(
+    `${QB_BASE}/${realmId}/estimate/${qboEstimateId}?operation=convert&minorversion=75`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({}),
+    }
+  );
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`QBO estimate convert failed: ${res.status} ${errText}`);
+  }
+
+  const data = await res.json();
+  const invoice = data.Invoice;
+
+  // Stamp the next sequential DocNumber
+  const docNumber = await getNextDocNumber("Invoice");
+  if (docNumber) {
+    // Update the invoice DocNumber (QBO created it without one on convert)
+    try {
+      await qboPost(`/invoice?minorversion=75`, {
+        ...invoice,
+        DocNumber: docNumber,
+        sparse: true,
+      });
+    } catch (_) {
+      // Non-fatal — invoice exists, just might not have the number
+    }
+  }
+
+  // Send invoice email
+  try {
+    await qboPost(`/invoice/${invoice.Id}/send?sendTo=${encodeURIComponent(customerEmail)}`, {});
+  } catch (_) {
+    console.warn("[QBO] Could not send invoice email after convert");
+  }
+
+  // Get payment link
+  let paymentLink: string | null = null;
+  try {
+    const linkData = await qboGet(`/invoice/${invoice.Id}/onlineinvoice`);
+    paymentLink = linkData?.InvoiceLink || null;
+  } catch (_) {}
+  if (!paymentLink) {
+    paymentLink = `https://app.qbo.intuit.com/app/invoice?txnId=${invoice.Id}`;
+  }
+
+  return {
+    invoiceId: invoice.Id,
+    invoiceNumber: docNumber || invoice.DocNumber || invoice.Id,
+    paymentLink,
+  };
+}
+
 // ── Get next sequential DocNumber for invoices or estimates ────────────────────
 async function getNextDocNumber(type: "Invoice" | "Estimate"): Promise<string> {
   try {
