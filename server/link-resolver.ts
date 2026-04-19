@@ -13,6 +13,10 @@
 
 import * as https from "https";
 import * as http from "http";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+import { execFile } from "child_process";
 
 // ── URL extraction ────────────────────────────────────────────────────────────
 const URL_REGEX = /https?:\/\/[^\s<>"]+/gi;
@@ -111,14 +115,48 @@ async function fetchAsBase64DataUrl(url: string, mimeType: string): Promise<stri
   return `data:${mimeType};base64,${buffer.toString("base64")}`;
 }
 
-// ── PDF → array of image data URLs using pdf-parse page count hint ────────────
-// We don't run a full PDF renderer on Railway (no Puppeteer), so we pass the
-// raw PDF as a base64 data URL and let OpenAI handle it natively.
-// GPT-4o Vision can read PDF data URLs directly.
+// ── PDF → PNG images via pdftoppm ───────────────────────────────────────
 async function pdfToDataUrls(url: string): Promise<string[]> {
-  const dataUrl = await fetchAsBase64DataUrl(url, "application/pdf");
-  // Return as a single item — GPT-4o will read all pages from the PDF data URL
-  return [dataUrl];
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "rcp-pdf-"));
+  const pdfPath = path.join(tmpDir, "plan.pdf");
+
+  try {
+    // Fetch PDF to disk
+    const resp = await globalThis.fetch(url, {
+      headers: { "User-Agent": "RCPBot/1.0" },
+      redirect: "follow",
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} fetching PDF`);
+    const buf = Buffer.from(await resp.arrayBuffer());
+    fs.writeFileSync(pdfPath, buf);
+    console.log(`[LinkResolver] PDF downloaded: ${buf.length} bytes → ${pdfPath}`);
+
+    // Convert PDF pages to PNGs using pdftoppm (150 dpi — good balance of quality vs size)
+    const outPrefix = path.join(tmpDir, "page");
+    await new Promise<void>((resolve, reject) => {
+      execFile("pdftoppm", ["-png", "-r", "150", pdfPath, outPrefix], (err) => {
+        if (err) reject(err); else resolve();
+      });
+    });
+
+    // Read all generated page PNGs and convert to base64 data URLs
+    const pngFiles = fs.readdirSync(tmpDir)
+      .filter(f => f.endsWith(".png"))
+      .sort()
+      .map(f => path.join(tmpDir, f));
+
+    console.log(`[LinkResolver] PDF converted to ${pngFiles.length} page(s)`);
+
+    const dataUrls = pngFiles.map(f => {
+      const data = fs.readFileSync(f);
+      return `data:image/png;base64,${data.toString("base64")}`;
+    });
+
+    return dataUrls;
+  } finally {
+    // Clean up temp files
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+  }
 }
 
 // ── Main resolver ─────────────────────────────────────────────────────────────
