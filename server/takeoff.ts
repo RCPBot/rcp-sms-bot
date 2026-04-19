@@ -21,6 +21,8 @@ function getClient(): OpenAI {
   return _client;
 }
 
+const FABRICATION_QBO_ID = "1010000301";
+
 // ── Bar weight table (lb/ft) ────────────────────────────────────────────────
 const BAR_WEIGHT: Record<string, number> = {
   "#3": 0.376, "#4": 0.668, "#5": 1.043, "#6": 1.502,
@@ -703,7 +705,7 @@ function buildFromCutSheet(consolidated: any, products: Product[]): TakeoffResul
     const markList = fabForTable.map(f => f.mark).slice(0, 12).join(", ");
     const desc = `Total fabricated (bent) bars: ${Math.round(fabLbForBilling).toLocaleString()} lb @ $0.75/lb. Marks: ${markList}${fabForTable.length > 12 ? ", ..." : ""}`;
     lineItems.push({
-      qboItemId: fabProduct?.qboItemId || "FAB-1",
+      qboItemId: fabProduct?.qboItemId || FABRICATION_QBO_ID,
       name: "Fabrication-1",
       description: desc,
       qty: 1,

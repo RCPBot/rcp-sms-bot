@@ -497,9 +497,13 @@ export function registerRoutes(httpServer: Server, app: Express) {
       // the Delivery Fee product (ID 1010000081) — delivery is added separately
       // by createInvoice via the deliveryFee parameter to avoid double-charging.
       const DELIVERY_FEE_QBO_ID = "1010000081";
+      const FAB_QBO_ID = "1010000301";
       const validItems = orderData.lineItems.filter((item: any) => {
         const id = String(item.qboItemId || "");
-        if (!id || id === "null" || id === "" || !/^\d+$/.test(id)) return false;
+        if (!id || id === "null" || id === "" || !/^\d+$/.test(id)) {
+          console.log(`[Order] Stripped non-numeric item: ${item.name} (id=${id})`);
+          return false;
+        }
         if (id === DELIVERY_FEE_QBO_ID) {
           console.log("[Order] Stripped AI-added delivery fee line item (handled separately)");
           return false;

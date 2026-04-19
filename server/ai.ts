@@ -553,9 +553,15 @@ export async function extractOrderFromConversation(
   deliveryAddress?: string;
   notes?: string;
 }> {
-  const productList = products.map(p =>
+  const FAB_QBO_ID = "1010000301";
+  const productLines = products.map(p =>
     `ID:${p.qboItemId} | ${p.name} | $${p.unitPrice || 0}`
-  ).join("\n");
+  );
+  const hasFab = products.some(p => p.name?.toLowerCase().includes("fabrication-1"));
+  if (!hasFab) {
+    productLines.push(`ID:${FAB_QBO_ID} | Fabrication-1 | $0.75/lb (custom bent bars — qty=lbs, unitPrice=0.75)`);
+  }
+  const productList = productLines.join("\n");
 
   const conversationText = messages
     .map(m => `${m.direction === "inbound" ? "Customer" : "Bot"}: ${m.body}`)
@@ -587,7 +593,8 @@ Everything else = Fabrication-1 (priced by weight at $0.75/lb):
 For Fabrication-1: qty = total weight in lbs, unitPrice = 0.75, amount = total_weight * 0.75
 - Total weight = pieces * cut_length_ft * weight_per_ft
 - Set description to the full fab spec: e.g. "500 #4 stirrups 12x24 w/ std hooks — 6.5 ft cut — 2171 lbs"
-- Use the product ID for "Fabrication-1" from the product list above
+- Fabrication-1 qboItemId is ALWAYS "1010000301", qty = total lbs, unitPrice = 0.75
+- qboItemId MUST be "1010000301" (never use "CUSTOM" for Fabrication-1)
 
 Return JSON in this exact format:
 {
