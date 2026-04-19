@@ -70,11 +70,13 @@ export default function ConversationDetail() {
           </div>
           <div className="ml-auto">
             <span className={`text-xs px-2 py-1 rounded border font-medium ${
-              conv.status === "active"
+              conv.stage === "invoiced"
+                ? "bg-yellow-500/20 text-yellow-400 border-yellow-500/30"
+                : conv.status === "active"
                 ? "bg-primary/20 text-primary border-primary/30"
                 : "bg-muted text-muted-foreground border-border"
             }`}>
-              {conv.status}
+              {conv.stage === "invoiced" ? "Invoiced" : conv.status}
             </span>
           </div>
         </div>

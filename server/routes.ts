@@ -244,7 +244,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
             deliveryFee = stored.__deliveryFee || 0;
           } catch {}
 
-          storage.updateConversation(conv.id, { stage: "invoiced", status: "completed", pendingImagesJson: null });
+          storage.updateConversation(conv.id, { stage: "invoiced", status: "active", pendingImagesJson: null });
 
           const dLine = deliveryFee > 0 ? `\nDelivery: $${deliveryFee.toFixed(2)}` : "";
           const payMsg = paymentLink
@@ -923,7 +923,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
         } catch (_) {}
       }
 
-      storage.updateConversation(conversationId, { stage: "invoiced", status: "completed" });
+      storage.updateConversation(conversationId, { stage: "invoiced", status: "active" });
     } catch (err) {
       console.error("[Estimate] Approval handler failed:", err);
       try {

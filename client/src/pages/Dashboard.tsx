@@ -43,7 +43,7 @@ export default function Dashboard() {
     refetchInterval: 10000,
   });
 
-  const active = conversations.filter(c => c.status === "active");
+  const active = conversations.filter(c => c.status === "active" && c.stage !== "invoiced" && c.stage !== "paid");
   const completed = conversations.filter(c => c.status === "completed");
   const invoiced = conversations.filter(c => c.stage === "invoiced" || c.stage === "paid");
 
