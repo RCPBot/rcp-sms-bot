@@ -510,33 +510,49 @@ export async function convertEstimateToInvoice(qboEstimateId: string, customerEm
 
 // ── Get next sequential DocNumber for invoices or estimates ────────────────────
 async function getNextDocNumber(type: "Invoice" | "Estimate"): Promise<string> {
+  const fallback = type === "Invoice" ? "20000" : "30000";
   try {
-    let maxNum = 0;
-    let startPos = 1;
-    const pageSize = 100;
-    while (true) {
-      const query = encodeURIComponent(
-        `SELECT DocNumber FROM ${type} STARTPOSITION ${startPos} MAXRESULTS ${pageSize}`
-      );
-      const data = await qboGet(`/query?query=${query}`);
-      const items: any[] = data.QueryResponse?.[type] || [];
-      if (!items.length) break;
-      for (const item of items) {
-        const match = (item.DocNumber || "").match(/(\d+)$/);
-        if (match) {
-          const n = parseInt(match[1], 10);
-          if (n > maxNum) maxNum = n;
+    const result = await Promise.race([
+      (async () => {
+        let maxNum = 0;
+        let startPos = 1;
+        const pageSize = 100;
+        let page = 0;
+        while (true) {
+          page++;
+          console.log(`[QBO] getNextDocNumber(${type}) page ${page} startPos=${startPos}`);
+          const query = encodeURIComponent(
+            `SELECT DocNumber FROM ${type} STARTPOSITION ${startPos} MAXRESULTS ${pageSize}`
+          );
+          const data = await qboGet(`/query?query=${query}`);
+          const items: any[] = data.QueryResponse?.[type] || [];
+          console.log(`[QBO] getNextDocNumber(${type}) page ${page}: got ${items.length} items`);
+          for (const item of items) {
+            const match = (item.DocNumber || "").match(/(\d+)$/);
+            if (match) {
+              const n = parseInt(match[1], 10);
+              if (n > maxNum) maxNum = n;
+            }
+          }
+          if (items.length < pageSize) break;
+          startPos += pageSize;
+          if (page > 20) {
+            console.warn(`[QBO] getNextDocNumber(${type}): exceeded 20 pages, stopping`);
+            break;
+          }
         }
-      }
-      if (items.length < pageSize) break; // last page
-      startPos += pageSize;
-    }
-    const next = maxNum > 0 ? String(maxNum + 1) : type === "Invoice" ? "20000" : "30000";
-    console.log(`[QBO] getNextDocNumber(${type}): maxNum=${maxNum}, next=${next}`);
-    return next;
+        const next = maxNum > 0 ? String(maxNum + 1) : fallback;
+        console.log(`[QBO] getNextDocNumber(${type}): maxNum=${maxNum}, next=${next}`);
+        return next;
+      })(),
+      new Promise<string>((_, reject) =>
+        setTimeout(() => reject(new Error(`getNextDocNumber(${type}) timed out after 15s`)), 15000)
+      ),
+    ]);
+    return result;
   } catch (err) {
     console.error(`[QBO] getNextDocNumber failed:`, err);
-    return type === "Invoice" ? "20000" : "30000";
+    return fallback;
   }
 }
 
