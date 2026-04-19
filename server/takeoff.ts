@@ -225,52 +225,69 @@ function matchPolyProduct(matName: string, qty: number, products: Product[]): Li
 
 // ── Pass 1 prompt: raw extraction per chunk ───────────────────────────────────
 // Focus: read EVERY bar mark and material. No summarizing. No totals.
-const PASS1_PROMPT = `You are a structural rebar detailer reading construction plan pages.
-Your ONLY job is to find and list every rebar item and material shown on these pages.
+const PASS1_PROMPT = `You are a licensed structural rebar detailer performing a complete material takeoff from construction plan pages.
+Your job is to extract EVERY rebar item and material with FULL quantities and dimensions — not just names.
 
-PLAN TYPES — read ALL of these carefully:
-1. REBAR SHOP DRAWINGS: Named bar marks (B1, S1, T1, etc.) with size, qty, cut length.
-2. FOUNDATION PLANS (post-tension or conventional): Read the PLAN LEGEND, GENERAL NOTES, and all callout bubbles. The legend explains what numbers/symbols mean. Numbered circles on plan view are strand or rebar counts.
-3. BEAM/PIER DETAIL SHEETS: Read every section detail for rebar callouts ("#4 bars cont.", "2-#3 bars vertical", "#3 @ 16" loops", etc.). Read any PIER REINFORCING SCHEDULE table.
-4. SLAB PLANS: Look for slab reinforcing notes, chair spacing callouts, and poly/vapor barrier area.
+══ PLAN TYPES ══
+1. REBAR SHOP DRAWINGS: Bar marks (B1, S1, T1) with size, qty, cut length, bend description. Extract all.
+2. FOUNDATION PLANS — DRILLED PIER / GRADE BEAM (most common Texas residential):
+   - Read GENERAL NOTES carefully. Notes like "ALL GRADE BEAMS: 4-#5 CONT., #3 STIRRUPS @ 12\" O.C." apply to EVERY beam.
+   - Count total drilled piers from the plan view. Note each pier diameter and depth from the pier schedule.
+   - For each pier: extract vertical bar count/size, tie/loop bar size and spacing. Multiply by total pier count.
+   - Measure or estimate total grade beam linear footage from the plan (perimeter + interior beams).
+   - For each beam type: extract bars-per-beam from the section detail, multiply by total beam LF.
+   - Grade beam stirrups: calculate spacing interval from beam LF. E.g. 400 LF beam, stirrups @ 12\" = 400 pcs.
+3. FOUNDATION PLANS — POST-TENSION:
+   - Read PLAN LEGEND and GENERAL NOTES. Numbered circles = strand counts (NOT rebar).
+   - Conventional rebar is in general notes ("#3 bars @ 48\" O.C. each way") and beam/pier details.
+4. BEAM / PIER DETAIL SHEETS:
+   - Read EVERY section cut. Extract: bar size, qty per section, cut length or dimension, bend type.
+   - Section callouts like "4-#5 CONT." = 4 continuous #5 bars for the full beam length.
+   - "#3 @ 12\" O.C." = stirrups/ties spaced 12\" apart — calculate total count from beam length.
+5. SLAB PLANS: chair spacing, poly area, slab thickness, reinforcing notes.
 
-RULES:
-- List EVERY named bar mark (B1, S1, T1, etc.) with its size, quantity, cut length, and bend description.
-- For straight stock bars (no bends, 20' lengths): list under "straightBars" with barSize AND either "totalLinearFt" (if LF is stated) OR "qty" (piece count, if the plan calls out a specific number of bars like "25 pcs #3 20'"). Use whichever the plan explicitly shows.
-- For fabricated/bent bars (hooks, stirrups, ties, dowels): list under "fabBars" — include mark (or description if no mark), barSize, qty (piece count), cutLengthFt, and bendDescription.
-- For foundation plans: read beam detail callouts and pier schedules. Each beam type shown in a detail is typically repeated many times on the plan — extract the rebar per beam type and note the beam type.
-- For pier schedules: list each pier diameter with its vertical bars and tie/loop bar as separate fabBars entries.
-- For other materials (vapor barrier, poly, chairs, tie wire, stakes): list under "otherMaterials".
-- CONCRETE CHAIRS: if callout says "chairs 4'-0" O.C.W." and a slab area is visible, estimate total chairs from the slab square footage.
-- Do NOT skip a page just because it has no formal rebar schedule — read ALL notes and details.
-- Do NOT list post-tension STRANDS as rebar (strands are not our product). DO list conventional deformed bars.
-- For poly/vapor barrier: always include mil thickness AND roll dimensions in the name (e.g. "6 mil poly 32x100"). Include quantity in SF if given, otherwise as rolls.
-- For concrete support: foundation plans use DOBIE BRICKS (concrete block chairs), NOT wire chairs. Output as name "dobie brick" with EA count.
-- Estimate dobie brick count from beam lengths: 1 dobie per 4 linear feet of beam, or use exact count if shown.
-- Wire chairs (500-pc bags) are only for elevated slabs/decks. Do not use for foundation plans.
-- NEVER return null for qty or cutLengthFt. If you cannot determine an exact count, make your best estimate based on slab dimensions and note it as approximate. A rough number is better than null.
-- For beam bars where qty cannot be counted (typical details repeated across a slab), estimate total linear feet based on the slab perimeter/interior beam layout visible on the plan.
-- Include the page number or sheet name in notes if visible.
+══ QUANTITY CALCULATION RULES (CRITICAL) ══
+- NEVER output qty=0 or cutLengthFt=0. A rough estimate is required — zero is always wrong.
+- DRILLED PIER VERTICALS: qty = bars_per_pier × total_pier_count. Cut length = pier_depth + development_length (add 2ft for hook/splice).
+- DRILLED PIER TIES/LOOPS: qty = ceil(pier_depth_ft / spacing_ft) × total_pier_count. Cut length = pier_circumference + 1ft overlap.
+- GRADE BEAM CONTINUOUS BARS: output as straightBars with totalLinearFt = bars_per_beam × total_beam_LF.
+- GRADE BEAM STIRRUPS: qty = ceil(total_beam_LF / stirrup_spacing_ft). cutLengthFt = beam_perimeter + hooks (add 1.5ft for hooks).
+- BEAM INTERSECTIONS / CORNER BARS: qty = number_of_beam_intersections × bars_per_intersection. Estimate intersections from plan view grid.
+- If plan dimensions are not visible, estimate from scale or note dimensions visible on the sheet and flag as approximate.
+- For any item where you must estimate, note "(estimated)" in the bendDescription.
+
+══ OTHER RULES ══
+- Do NOT list PT strands as rebar.
+- Poly/vapor barrier: include mil thickness AND roll size in name (e.g. "6 mil poly 32x100"). Quantity in SF.
+- Foundation plans use DOBIE BRICKS not wire chairs. Estimate 1 dobie per 4 LF of beam.
+- Include sheet/page number in notes if visible.
+- Read ALL pages — never skip a page with details or notes.
+
+══ DRILLED PIER EXAMPLE (so you know what to look for) ══
+Plan shows: 18 piers, 12\" dia, 10ft deep. Detail shows: 6-#5 vertical bars, #3 ties @ 12\" O.C.
+→ Pier verticals: qty = 6 × 18 = 108 pcs, cutLengthFt = 12ft (10ft + 2ft hook), bendDescription = "straight vertical w/ 90-deg hook, 12in pier"
+→ Pier ties: qty = ceil(10/1) × 18 = 180 pcs, cutLengthFt = 3.5ft (12in dia circumference + overlap), bendDescription = "closed loop tie, 12in pier @ 12in O.C."
+
+══ GRADE BEAM EXAMPLE ══
+Plan shows: ~320 LF total grade beams. General notes say: "GRADE BEAMS: 4-#5 CONT., #3 STIRRUPS @ 16\" O.C."
+→ Grade beam bars: straightBars entry, barSize=#5, totalLinearFt = 4 × 320 = 1280 LF
+→ Stirrups: qty = ceil(320 / 1.33) = 241 pcs, cutLengthFt = beam_width + beam_depth × 2 + hooks (e.g. 2.5ft), bendDescription = "stirrup, grade beam @ 16in O.C."
 
 Return ONLY valid JSON:
 {
-  "projectName": "name if visible on these pages, else null",
-  "notes": ["sheet F1 — foundation plan", "post-tension slab with conventional rebar in beams and piers"],
+  "projectName": "name from title block, else null",
+  "notes": ["sheet F1 — drilled pier foundation", "18 piers 12in dia 10ft deep", "~320 LF total grade beams"],
   "straightBars": [
-    {"barSize": "#5", "totalLinearFt": 120, "location": "beam top and bottom"},
-    {"barSize": "#3", "qty": 25, "location": "corner bars per general notes"},
-    {"barSize": "#4", "qty": 15, "location": "beam continuous bars"}
+    {"barSize": "#5", "totalLinearFt": 1280, "location": "grade beam continuous bars, 4 per beam x 320 LF"}
   ],
   "fabBars": [
-    {"mark": "B1", "barSize": "#4", "qty": 24, "cutLengthFt": 5.5, "bendDescription": "90-deg hook both ends, 4in legs"},
-    {"mark": "PIER-12IN-VERT", "barSize": "#6", "qty": 6, "cutLengthFt": 10, "bendDescription": "straight vertical, 12in pier"},
-    {"mark": "PIER-12IN-LOOP", "barSize": "#3", "qty": 20, "cutLengthFt": 3.5, "bendDescription": "closed loop tie @ 16in spacing"}
+    {"mark": "PIER-VERT", "barSize": "#5", "qty": 108, "cutLengthFt": 12, "bendDescription": "straight vertical w/ 90-deg hook, 12in pier, (18 piers x 6 bars)"},
+    {"mark": "PIER-TIE", "barSize": "#3", "qty": 180, "cutLengthFt": 3.5, "bendDescription": "closed loop tie 12in pier @ 12in O.C., (18 piers x 10 ties)"},
+    {"mark": "BEAM-STIRRUP", "barSize": "#3", "qty": 241, "cutLengthFt": 2.5, "bendDescription": "stirrup grade beam 16in O.C., 320 LF total"}
   ],
   "otherMaterials": [
-    {"name": "concrete chairs", "qty": 500, "unit": "EA"},
-    {"name": "6 mil poly 32x100", "qty": 3200, "unit": "SF"},
-    {"name": "concrete chair", "qty": 500, "unit": "EA"},
-    {"name": "dobie brick", "qty": 24, "unit": "EA"}
+    {"name": "6 mil poly 32x100", "qty": 2400, "unit": "SF"},
+    {"name": "dobie brick", "qty": 80, "unit": "EA"}
   ]
 }`;
 
@@ -337,7 +354,7 @@ async function callResponsesApi(
         model: "gpt-4o",
         input: [{ role: "user", content: inputContent }],
         text: { format: { type: "json_object" } },
-        max_output_tokens: 6000,
+        max_output_tokens: 12000,
         temperature: 0,
       } as any);
 
