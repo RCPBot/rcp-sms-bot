@@ -1,11 +1,16 @@
 /**
- * AI Takeoff Engine
- * Reads plan page images (or PDFs) with GPT-4o Vision and extracts a full material takeoff.
- * Returns line items matched to QBO products, fabrication cut-sheet items,
- * notes, and a project name.
+ * AI Takeoff Engine — Two-Pass Architecture
  *
- * PDF inputs use the OpenAI Responses API with input_file (file_url) — no system binary needed.
- * Image inputs use the Chat Completions API with image_url content parts.
+ * Pass 1 (per chunk): Raw extraction — every bar mark, qty, dimensions, bend details.
+ *   No summarizing, no consolidation. Just read and report exactly what's on each page.
+ *
+ * Pass 2 (single call): Consolidation — merge all chunk data, deduplicate bar marks,
+ *   sum quantities, compute weights, produce the final cut sheet + other materials.
+ *
+ * Pass 3: Price from the consolidated cut sheet using QBO products.
+ *
+ * PDF inputs use the OpenAI Responses API with inline base64 — no system binary needed.
+ * Image inputs fall back to Chat Completions API with image_url content parts.
  */
 import OpenAI from "openai";
 import type { Product, LineItem, FabItem } from "@shared/schema";
@@ -37,9 +42,7 @@ function matchProduct(
   products: Product[]
 ): LineItem | null {
   const lower = materialName.toLowerCase();
-  // Try direct name match first
   let best = products.find(p => p.name.toLowerCase() === lower);
-  // Fallback: partial match
   if (!best) {
     best = products.find(p => {
       const pn = p.name.toLowerCase();
@@ -69,51 +72,8 @@ function calcStockBars(
   return { barsPerStock, stockBarsNeeded };
 }
 
-// ── Build the system prompt ──────────────────────────────────────────────────
-function buildSystemPrompt(products: Product[]): string {
-  const productList = products
-    .map(p => `- "${p.name}"${p.description ? ": " + p.description : ""}`)
-    .join("\n");
-
-  return `You are an expert construction estimator specializing in rebar and concrete supply for Rebar Concrete Products (McKinney, TX).
-
-You will receive a customer's plan set (as images or a PDF). Your job is to perform a COMPLETE material takeoff and return structured JSON.
-
-RULES:
-1. Extract EVERY piece of rebar, vapor barrier, concrete chair, forming lumber, stakes, tie wire, and any other material visible in the plans.
-2. For standard/straight rebar that can ship as stock 20-ft bars: list under "standardRebar".
-3. For any custom bent/fabricated rebar (L-bars, U-bars, hooks, stirrups, spirals, hairpins, etc.): list under "fabRebar".
-4. For all other materials (vapor barrier, chairs, forming lumber, duplex nails, stakes, tie wire, etc.): list under "otherMaterials".
-5. For standardRebar: calculate totalLinearFeet needed for each bar size across the entire job. Prefer 20-ft stock lengths.
-6. For fabRebar: include exact cut length, quantity, bend description, and bar size.
-7. Match material names EXACTLY to products in the available QBO product list where possible.
-8. If no exact match exists in the product list, use the closest name.
-
-AVAILABLE QBO PRODUCTS:
-${productList}
-
-BAR WEIGHTS (lb/ft): #3=0.376, #4=0.668, #5=1.043, #6=1.502, #7=2.044, #8=2.670, #9=3.400, #10=4.303
-
-Return ONLY valid JSON in exactly this format:
-{
-  "projectName": "project name if visible, else 'Customer Takeoff'",
-  "notes": ["note about page 1", "note about page 2", ...],
-  "standardRebar": [
-    {"barSize": "#4", "totalLinearFt": 240, "productName": "Rebar #4 (20' Stock)"}
-  ],
-  "fabRebar": [
-    {"mark": "B1", "barSize": "#4", "qty": 12, "cutLengthFt": 4.5, "bendDescription": "90-deg hook, 6in leg", "productName": "Fabrication-1"}
-  ],
-  "otherMaterials": [
-    {"name": "Vapor Barrier 10 mil", "qty": 500, "unit": "SF", "productName": "Vapor Barrier 10 mil"}
-  ]
-}`;
-}
-
 // ── Unit conversion helpers ───────────────────────────────────────────────────
-// Vapor barrier: each roll is 20x100 = 2,000 SF
-const VAPOR_BARRIER_SF_PER_ROLL = 2000;
-// Concrete chairs: each bag has 500 pieces
+const VAPOR_BARRIER_SF_PER_ROLL = 2000; // 20x100 roll
 const CHAIRS_PER_BAG = 500;
 
 function isVaporBarrier(name: string): boolean {
@@ -125,15 +85,170 @@ function isChair(name: string): boolean {
   return l.includes("chair") || l.includes("slab bolster") || l.includes("bar chair");
 }
 
-// ── Parse raw JSON into TakeoffResult ────────────────────────────────────────
-function parseRawTakeoff(raw: any, products: Product[]): TakeoffResult {
+// ── Pass 1 prompt: raw extraction per chunk ───────────────────────────────────
+// Focus: read EVERY bar mark and material. No summarizing. No totals.
+const PASS1_PROMPT = `You are a structural rebar detailer reading construction plan pages.
+Your ONLY job is to find and list every rebar item and material shown on these pages.
+
+RULES:
+- List EVERY bar mark (B1, S1, T1, etc.) with its size, quantity, cut length, and bend description.
+- For straight stock bars (no bends): list under "straightBars" with barSize and totalLinearFt shown on these pages.
+- For fabricated/bent bars: list under "fabBars" — include mark, barSize, qty (piece count), cutLengthFt, and bendDescription.
+- For other materials (vapor barrier, chairs, tie wire, forming lumber, stakes, nails): list under "otherMaterials".
+- Do NOT consolidate or total across pages. Report exactly what you see on each page.
+- If a bar mark appears multiple times on these pages, list each occurrence separately.
+- Include the page number or sheet name in notes if visible.
+- If a page has no rebar information (title page, civil drawings, etc.), note it but still return valid JSON.
+
+Return ONLY valid JSON:
+{
+  "projectName": "name if visible on these pages, else null",
+  "notes": ["sheet S1.0 — foundation plan", ...],
+  "straightBars": [
+    {"barSize": "#5", "totalLinearFt": 120, "location": "slab on grade"}
+  ],
+  "fabBars": [
+    {"mark": "B1", "barSize": "#4", "qty": 24, "cutLengthFt": 5.5, "bendDescription": "90-deg hook both ends, 4in legs"}
+  ],
+  "otherMaterials": [
+    {"name": "10 mil poly", "qty": 2000, "unit": "SF"}
+  ]
+}`;
+
+// ── Pass 2 prompt: consolidation ──────────────────────────────────────────────
+// Takes all chunk JSONs as input, produces the final complete cut sheet.
+function buildPass2Prompt(chunkDataJson: string): string {
+  return `You are a structural rebar estimator. You have received raw takeoff data extracted from ${JSON.parse(chunkDataJson).length} sections of a plan set.
+
+Your job is to consolidate this data into a single accurate cut sheet:
+1. MERGE duplicate bar marks across sections — if B1 appears in multiple sections, sum the quantities.
+2. TOTAL all straight bars by size — sum all totalLinearFt for each bar size.
+3. PRESERVE all unique fab bar marks with their full specs.
+4. COMBINE other materials by type.
+5. Use the project name from the first section that has one.
+
+Here is the raw chunk data:
+${chunkDataJson}
+
+BAR WEIGHTS (lb/ft): #3=0.376, #4=0.668, #5=1.043, #6=1.502, #7=2.044, #8=2.670, #9=3.400, #10=4.303, #11=5.313
+
+Return ONLY valid JSON in this exact format:
+{
+  "projectName": "Ascension Cottages",
+  "notes": ["summary notes about the plan set"],
+  "standardRebar": [
+    {"barSize": "#5", "totalLinearFt": 840}
+  ],
+  "fabRebar": [
+    {"mark": "B1", "barSize": "#4", "qty": 48, "cutLengthFt": 5.5, "bendDescription": "90-deg hook both ends, 4in legs"}
+  ],
+  "otherMaterials": [
+    {"name": "10 mil poly", "qty": 4000, "unit": "SF"}
+  ]
+}`;
+}
+
+// ── Helper: call Responses API with inline base64 PDF ────────────────────────
+async function callResponsesApi(
+  client: OpenAI,
+  chunkBytes: Uint8Array,
+  chunkIndex: number,
+  totalChunks: number,
+  promptText: string,
+  chunkLabel: string
+): Promise<string> {
+  const b64 = Buffer.from(chunkBytes).toString("base64");
+  const mb = Math.round(chunkBytes.length / 1024 / 1024 * 10) / 10;
+  console.log(`[Takeoff] ${chunkLabel} (${mb}MB inline)`);
+
+  const inputContent: any[] = [
+    { type: "input_text", text: promptText },
+    { type: "input_file", filename: `plan-chunk-${chunkIndex + 1}.pdf`, file_data: `data:application/pdf;base64,${b64}` },
+    { type: "input_text", text: `This is chunk ${chunkIndex + 1} of ${totalChunks} from the plan set. Read EVERY page carefully and report all rebar marks and materials you see. Return JSON only.` },
+  ];
+
+  let rawText = "";
+  let attempts = 0;
+  while (attempts < 5) {
+    try {
+      const response = await client.responses.create({
+        model: "gpt-4o",
+        input: [{ role: "user", content: inputContent }],
+        text: { format: { type: "json_object" } },
+        max_output_tokens: 6000,
+        temperature: 0,
+      } as any);
+
+      const output = (response as any).output;
+      if (Array.isArray(output)) {
+        for (const item of output) {
+          if (item.type === "message" && Array.isArray(item.content)) {
+            for (const part of item.content) {
+              if (part.type === "output_text") rawText += part.text;
+            }
+          }
+        }
+      }
+      break;
+    } catch (err: any) {
+      if (err?.status === 429 || err?.code === "rate_limit_exceeded") {
+        const match = err?.message?.match(/(\d+\.?\d*)\s*s\b/);
+        const waitSec = match ? Math.ceil(parseFloat(match[1])) + 5 : 65;
+        console.log(`[Takeoff] Rate limited on ${chunkLabel}, waiting ${waitSec}s...`);
+        await new Promise(r => setTimeout(r, waitSec * 1000));
+        attempts++;
+      } else {
+        throw err;
+      }
+    }
+  }
+  return rawText;
+}
+
+// ── Pass 2: consolidation via Chat Completions (text only, no PDF) ────────────
+async function runConsolidationPass(client: OpenAI, chunkRaws: any[]): Promise<any> {
+  const chunkDataJson = JSON.stringify(chunkRaws, null, 2);
+  const prompt = buildPass2Prompt(chunkDataJson);
+  console.log(`[Takeoff] Pass 2: consolidating ${chunkRaws.length} chunk(s)...`);
+
+  let attempts = 0;
+  while (attempts < 5) {
+    try {
+      const response = await client.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          { role: "system", content: "You are a rebar estimator. Consolidate the provided raw takeoff data into a single accurate cut sheet. Return only valid JSON." },
+          { role: "user", content: prompt },
+        ],
+        response_format: { type: "json_object" },
+        max_tokens: 6000,
+        temperature: 0,
+      });
+      try { return JSON.parse(response.choices[0].message.content || "{}"); } catch { return {}; }
+    } catch (err: any) {
+      if (err?.status === 429 || err?.code === "rate_limit_exceeded") {
+        const match = err?.message?.match(/(\d+\.?\d*)\s*s\b/);
+        const waitSec = match ? Math.ceil(parseFloat(match[1])) + 5 : 65;
+        console.log(`[Takeoff] Pass 2 rate limited, waiting ${waitSec}s...`);
+        await new Promise(r => setTimeout(r, waitSec * 1000));
+        attempts++;
+      } else {
+        throw err;
+      }
+    }
+  }
+  return {};
+}
+
+// ── Build line items + fab items from consolidated cut sheet ─────────────────
+function buildFromCutSheet(consolidated: any, products: Product[]): TakeoffResult {
   const lineItems: LineItem[] = [];
   const fabItems: FabItem[] = [];
-  const takeoffNotes: string[] = raw.notes || [];
-  const projectName: string = raw.projectName || "Customer Takeoff";
+  const takeoffNotes: string[] = consolidated.notes || [];
+  const projectName: string = consolidated.projectName || "Customer Takeoff";
 
-  // ── Process standard rebar → stock bars ──────────────────────────────────
-  for (const sr of (raw.standardRebar || [])) {
+  // ── Standard (straight stock) rebar ──────────────────────────────────────
+  for (const sr of (consolidated.standardRebar || [])) {
     const barSize: string = sr.barSize || "#4";
     const totalLF: number = parseFloat(sr.totalLinearFt) || 0;
     const stockLen = 20;
@@ -146,32 +261,19 @@ function parseRawTakeoff(raw: any, products: Product[]): TakeoffResult {
     if (matched) {
       lineItems.push({ ...matched, description: desc });
     } else {
-      lineItems.push({
-        qboItemId: "CUSTOM",
-        name: `${barSize} Rebar (20' stock)`,
-        description: desc,
-        qty: stockBarsNeeded,
-        unitPrice: 0,
-        amount: 0,
-      });
+      lineItems.push({ qboItemId: "CUSTOM", name: `${barSize} Rebar (20' stock)`, description: desc, qty: stockBarsNeeded, unitPrice: 0, amount: 0 });
     }
-    // Cut sheet row
     fabItems.push({
       mark: `S-${barSize.replace("#", "")}`,
-      barSize,
-      qty: stockBarsNeeded,
-      lengthFt: stockLen,
-      totalLF: stockBarsNeeded * stockLen,
-      weightLbs: totalWeight,
-      bendDescription: "Straight — stock length",
-      stockLengthFt: stockLen,
-      barsPerStock: 1,
-      stockBarsNeeded,
+      barSize, qty: stockBarsNeeded, lengthFt: stockLen,
+      totalLF: stockBarsNeeded * stockLen, weightLbs: totalWeight,
+      bendDescription: "Straight — stock length", stockLengthFt: stockLen,
+      barsPerStock: 1, stockBarsNeeded,
     });
   }
 
-  // ── Process fabricated rebar ──────────────────────────────────────────────
-  for (const fr of (raw.fabRebar || [])) {
+  // ── Fabricated rebar ──────────────────────────────────────────────────────
+  for (const fr of (consolidated.fabRebar || [])) {
     const barSize: string = fr.barSize || "#4";
     const qty: number = parseInt(fr.qty) || 1;
     const cutLengthFt: number = parseFloat(fr.cutLengthFt) || 2;
@@ -182,41 +284,26 @@ function parseRawTakeoff(raw: any, products: Product[]): TakeoffResult {
     const { barsPerStock, stockBarsNeeded } = calcStockBars(barSize, qty, cutLengthFt);
     const mark = fr.mark || `F${fabItems.length + 1}`;
     const bendDesc = fr.bendDescription || "Custom bend";
-
-    // Full spec description for QBO line item
     const desc = `Mark: ${mark} | ${barSize} | Qty: ${qty} pc | Cut length: ${cutLengthFt}' | ${bendDesc} | ${totalWeight} lbs total`;
 
     const fabProduct = products.find(p => p.name.toLowerCase().includes("fabrication-1") || p.name.toLowerCase() === "fabrication-1");
     lineItems.push({
       qboItemId: fabProduct?.qboItemId || "FAB-1",
-      name: `Fabrication-1`,
+      name: "Fabrication-1",
       description: desc,
       qty: totalWeight,
       unitPrice: 0.75,
       amount: priceLbs,
     });
-
-    fabItems.push({
-      mark,
-      barSize,
-      qty,
-      lengthFt: cutLengthFt,
-      totalLF,
-      weightLbs: totalWeight,
-      bendDescription: bendDesc,
-      stockLengthFt: 20,
-      barsPerStock,
-      stockBarsNeeded,
-    });
+    fabItems.push({ mark, barSize, qty, lengthFt: cutLengthFt, totalLF, weightLbs: totalWeight, bendDescription: bendDesc, stockLengthFt: 20, barsPerStock, stockBarsNeeded });
   }
 
-  // ── Process other materials ───────────────────────────────────────────────
-  for (const om of (raw.otherMaterials || [])) {
+  // ── Other materials ───────────────────────────────────────────────────────
+  for (const om of (consolidated.otherMaterials || [])) {
     const rawQty = parseFloat(om.qty) || 1;
     const unit: string = (om.unit || "EA").toUpperCase();
     const matName: string = om.productName || om.name || "";
 
-    // Unit conversions
     let qty = rawQty;
     let desc = "";
     if (isVaporBarrier(matName) && unit === "SF") {
@@ -235,14 +322,7 @@ function parseRawTakeoff(raw: any, products: Product[]): TakeoffResult {
     if (matched) {
       lineItems.push({ ...matched, description: desc });
     } else {
-      lineItems.push({
-        qboItemId: "CUSTOM",
-        name: om.name || matName,
-        description: desc,
-        qty,
-        unitPrice: 0,
-        amount: 0,
-      });
+      lineItems.push({ qboItemId: "CUSTOM", name: om.name || matName, description: desc, qty, unitPrice: 0, amount: 0 });
     }
   }
 
@@ -250,28 +330,19 @@ function parseRawTakeoff(raw: any, products: Product[]): TakeoffResult {
 }
 
 // ── Core takeoff function ────────────────────────────────────────────────────
-// mediaItems: array of URL strings. PDF URLs are prefixed with "pdf::"
 export async function performTakeoff(
   mediaItems: string[],
   products: Product[]
 ): Promise<TakeoffResult> {
-  const systemPrompt = buildSystemPrompt(products);
-
-  // Separate PDFs from images
   const pdfUrls = mediaItems.filter(u => u.startsWith("pdf::")).map(u => u.slice(5));
   const imageUrls = mediaItems.filter(u => !u.startsWith("pdf::") && !u.startsWith("__"));
 
   if (pdfUrls.length > 0) {
-    // ── Use Responses API with inline base64 PDF data ────────────────────────
-    // Download the PDF, split into ≤38MB chunks using pdf-lib,
-    // then pass each chunk inline as base64 to the Responses API.
-    // This avoids the Files API entirely (no Azure download timeout).
     const MAX_CHUNK_BYTES = 38 * 1024 * 1024;
-    console.log(`[Takeoff] Downloading ${pdfUrls.length} PDF(s) for inline processing`);
+    console.log(`[Takeoff] Downloading ${pdfUrls.length} PDF(s) for two-pass processing`);
     const client = getClient();
     const { PDFDocument } = await import("pdf-lib");
 
-    // Collect all ready chunks across all PDFs
     const readyChunks: Uint8Array[] = [];
 
     for (const pdfUrl of pdfUrls) {
@@ -285,19 +356,15 @@ export async function performTakeoff(
       console.log(`[Takeoff] PDF downloaded: ${pdfBuffer.length} bytes`);
 
       if (pdfBuffer.length <= MAX_CHUNK_BYTES) {
-        // Small enough — use as a single chunk
-        console.log(`[Takeoff] PDF fits in one chunk (${Math.round(pdfBuffer.length/1024/1024*10)/10}MB)`);
+        console.log(`[Takeoff] PDF fits in one chunk (${Math.round(pdfBuffer.length / 1024 / 1024 * 10) / 10}MB)`);
         readyChunks.push(new Uint8Array(pdfBuffer));
       } else {
-        // Too large — split into page chunks using pdf-lib adaptively
-        console.log(`[Takeoff] PDF too large (${pdfBuffer.length} bytes), splitting into chunks...`);
+        console.log(`[Takeoff] PDF too large (${pdfBuffer.length} bytes), splitting adaptively...`);
         const srcPdf = await PDFDocument.load(pdfBuffer);
         const totalPages = srcPdf.getPageCount();
         console.log(`[Takeoff] PDF has ${totalPages} pages, splitting adaptively`);
 
-        // Queue-based halving: if a rendered chunk is still too big, split in half
         const segments: Array<[number, number]> = [[0, totalPages]];
-
         while (segments.length > 0) {
           const [start, end] = segments.shift()!;
           const pageIndices = Array.from({ length: end - start }, (_, i) => start + i);
@@ -309,7 +376,7 @@ export async function performTakeoff(
 
           if (chunkBytes.length > MAX_CHUNK_BYTES && (end - start) > 1) {
             const mid = Math.floor((start + end) / 2);
-            console.log(`[Takeoff] Pages ${start + 1}-${end} = ${mb}MB > limit, halving into ${start+1}-${mid} and ${mid+1}-${end}`);
+            console.log(`[Takeoff] Pages ${start + 1}-${end} = ${mb}MB > limit, halving into ${start + 1}-${mid} and ${mid + 1}-${end}`);
             segments.unshift([mid, end]);
             segments.unshift([start, mid]);
           } else {
@@ -319,132 +386,57 @@ export async function performTakeoff(
         }
       }
     }
-    console.log(`[Takeoff] ${readyChunks.length} chunk(s) ready for Responses API`);
+    console.log(`[Takeoff] ${readyChunks.length} chunk(s) ready — starting Pass 1 (raw extraction)`);
 
-    // Process each chunk separately using inline base64 (avoids Files API timeout issues)
-    // Responses API accepts: { type: "input_file", filename, file_data: "data:application/pdf;base64,..." }
-    const allPartialRaws: any[] = [];
+    // ── Pass 1: raw extraction per chunk ──────────────────────────────────────
+    const chunkRaws: any[] = [];
     for (let i = 0; i < readyChunks.length; i++) {
-      const chunkBytes = readyChunks[i];
-      const b64 = Buffer.from(chunkBytes).toString("base64");
-      const mb = Math.round(chunkBytes.length / 1024 / 1024 * 10) / 10;
-      console.log(`[Takeoff] Running Responses API for chunk ${i + 1}/${readyChunks.length} (${mb}MB inline)`);
-
-      const inputContent: any[] = [
-        {
-          type: "input_text",
-          text: systemPrompt,
-        },
-        {
-          type: "input_file",
-          filename: `plan-chunk-${i + 1}.pdf`,
-          file_data: `data:application/pdf;base64,${b64}`,
-        },
-        {
-          type: "input_text",
-          text: `This is chunk ${i + 1} of ${readyChunks.length} from the customer's plan set (large PDFs are split into chunks). Perform a complete material takeoff for rebar, vapor barrier, chairs, forming lumber, stakes, tie wire, and anything else visible. Be thorough — examine every page carefully. Return JSON in the exact format specified.`,
-        },
-      ];
-
-      let rawText = "";
-      // Retry loop for rate limit errors
-      let attempts = 0;
-      while (attempts < 5) {
-        try {
-          const response = await client.responses.create({
-            model: "gpt-4o",
-            input: [
-              {
-                role: "user",
-                content: inputContent,
-              },
-            ],
-            text: { format: { type: "json_object" } },
-            max_output_tokens: 4000,
-            temperature: 0,
-          } as any);
-
-          const output = (response as any).output;
-          if (Array.isArray(output)) {
-            for (const item of output) {
-              if (item.type === "message" && Array.isArray(item.content)) {
-                for (const part of item.content) {
-                  if (part.type === "output_text") rawText += part.text;
-                }
-              }
-            }
-          }
-          break; // success
-        } catch (err: any) {
-          if (err?.status === 429 || err?.code === 'rate_limit_exceeded') {
-            const match = err?.message?.match(/(\d+\.?\d*)\s*s\b/);
-            const waitSec = match ? Math.ceil(parseFloat(match[1])) + 5 : 65;
-            console.log(`[Takeoff] Rate limited on chunk ${i + 1}, waiting ${waitSec}s before retry...`);
-            await new Promise(r => setTimeout(r, waitSec * 1000));
-            attempts++;
-          } else {
-            throw err;
-          }
-        }
-      }
-      console.log(`[Takeoff] Chunk ${i + 1} response length: ${rawText.length} chars`);
-      try { allPartialRaws.push(JSON.parse(rawText || "{}")); } catch { allPartialRaws.push({}); }
+      const rawText = await callResponsesApi(
+        client,
+        readyChunks[i],
+        i,
+        readyChunks.length,
+        PASS1_PROMPT,
+        `[Takeoff] Pass 1 chunk ${i + 1}/${readyChunks.length}`
+      );
+      console.log(`[Takeoff] Pass 1 chunk ${i + 1} response: ${rawText.length} chars`);
+      try { chunkRaws.push(JSON.parse(rawText || "{}")); } catch { chunkRaws.push({}); }
     }
 
-    // Merge all partial results into one combined raw takeoff
-    const merged: any = {
-      projectName: allPartialRaws.find(r => r.projectName && r.projectName !== "Customer Takeoff")?.projectName || allPartialRaws[0]?.projectName || "Customer Takeoff",
-      notes: allPartialRaws.flatMap(r => r.notes || []),
-      standardRebar: allPartialRaws.flatMap(r => r.standardRebar || []),
-      fabRebar: allPartialRaws.flatMap(r => r.fabRebar || []),
-      otherMaterials: allPartialRaws.flatMap(r => r.otherMaterials || []),
-    };
+    // ── Pass 2: consolidation (text only, no PDF needed) ─────────────────────
+    const consolidated = await runConsolidationPass(client, chunkRaws);
+    console.log(`[Takeoff] Pass 2 complete — ${consolidated.standardRebar?.length || 0} straight bar size(s), ${consolidated.fabRebar?.length || 0} fab mark(s), ${consolidated.otherMaterials?.length || 0} other material(s)`);
 
-    // Consolidate duplicate bar sizes in standardRebar (sum totalLinearFt)
-    const rebarMap = new Map<string, { barSize: string; totalLinearFt: number; productName: string }>();
-    for (const sr of merged.standardRebar) {
-      const key = sr.barSize;
-      if (rebarMap.has(key)) {
-        rebarMap.get(key)!.totalLinearFt += parseFloat(sr.totalLinearFt) || 0;
-      } else {
-        rebarMap.set(key, { barSize: sr.barSize, totalLinearFt: parseFloat(sr.totalLinearFt) || 0, productName: sr.productName });
-      }
-    }
-    merged.standardRebar = Array.from(rebarMap.values());
-    console.log(`[Takeoff] Merged ${allPartialRaws.length} chunks → ${merged.standardRebar.length} rebar sizes, ${merged.fabRebar.length} fab items, ${merged.otherMaterials.length} other materials`);
-
-    return parseRawTakeoff(merged, products);
+    return buildFromCutSheet(consolidated, products);
 
   } else {
-    // ── Use Chat Completions API with image_url content parts ───────────────
+    // ── Image fallback: Chat Completions with image_url parts ─────────────────
     console.log(`[Takeoff] Using Chat Completions for ${imageUrls.length} image(s)`);
+    const client = getClient();
+
+    const productList = products.map(p => `- "${p.name}"`).join("\n");
+    const systemPrompt = `You are an expert construction estimator for Rebar Concrete Products (McKinney, TX). Perform a complete material takeoff from the plan images and return structured JSON.\n\nAVAILABLE QBO PRODUCTS:\n${productList}\n\nBAR WEIGHTS (lb/ft): #3=0.376, #4=0.668, #5=1.043, #6=1.502, #7=2.044, #8=2.670, #9=3.400, #10=4.303\n\nReturn JSON: { "projectName": "...", "notes": [], "standardRebar": [{"barSize":"#4","totalLinearFt":240,"productName":"..."}], "fabRebar": [{"mark":"B1","barSize":"#4","qty":12,"cutLengthFt":4.5,"bendDescription":"...","productName":"Fabrication-1"}], "otherMaterials": [{"name":"...","qty":500,"unit":"SF","productName":"..."}] }`;
+
     const contentParts: OpenAI.Chat.ChatCompletionContentPart[] = [
-      {
-        type: "text",
-        text: `Here are ${imageUrls.length} page(s) of the customer's plan set. Please perform a complete material takeoff for rebar, vapor barrier, chairs, forming lumber, stakes, tie wire, and anything else that matches our product catalog. Be thorough — examine every page carefully.`,
-      },
+      { type: "text", text: `Here are ${imageUrls.length} page(s) of the plan set. Perform a complete material takeoff.` },
     ];
     for (const url of imageUrls) {
       contentParts.push({ type: "image_url", image_url: { url, detail: "high" } });
     }
 
-    const response = await getClient().chat.completions.create({
+    const response = await client.chat.completions.create({
       model: "gpt-4o",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: contentParts },
       ],
       response_format: { type: "json_object" },
-      max_tokens: 4000,
+      max_tokens: 6000,
       temperature: 0,
     });
 
     let raw: any = {};
-    try {
-      raw = JSON.parse(response.choices[0].message.content || "{}");
-    } catch {
-      raw = {};
-    }
-    return parseRawTakeoff(raw, products);
+    try { raw = JSON.parse(response.choices[0].message.content || "{}"); } catch { raw = {}; }
+    return buildFromCutSheet(raw, products);
   }
 }
