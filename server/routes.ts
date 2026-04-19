@@ -39,12 +39,33 @@ export function registerRoutes(httpServer: Server, app: Express) {
     const cleanBody = (messageBody || "").trim();
 
     // Collect any MMS image URLs Twilio sends (MediaUrl0, MediaUrl1, ...)
+    // Download each image and convert to base64 data URI — Twilio URLs require auth
+    // and OpenAI can't fetch them directly.
     const mediaUrls: string[] = [];
     const numMedia = parseInt(NumMedia || "0", 10);
     for (let i = 0; i < numMedia; i++) {
       const url = req.body[`MediaUrl${i}`];
       const type = (req.body[`MediaContentType${i}`] || "").toLowerCase();
-      if (url && type.startsWith("image/")) mediaUrls.push(url);
+      if (!url || !type.startsWith("image/")) continue;
+      try {
+        const accountSid = process.env.TWILIO_ACCOUNT_SID!;
+        const authToken = process.env.TWILIO_AUTH_TOKEN!;
+        const auth = Buffer.from(`${accountSid}:${authToken}`).toString("base64");
+        const imgResp = await globalThis.fetch(url, {
+          headers: { Authorization: `Basic ${auth}` },
+        });
+        if (!imgResp.ok) {
+          console.warn(`[MMS] Could not download Twilio image (${imgResp.status}): ${url}`);
+          continue;
+        }
+        const imgBuf = await imgResp.arrayBuffer();
+        const mimeType = type.split(";")[0] || "image/jpeg";
+        const b64 = Buffer.from(imgBuf).toString("base64");
+        mediaUrls.push(`data:${mimeType};base64,${b64}`);
+        console.log(`[MMS] Downloaded & encoded Twilio image (${Math.round(imgBuf.byteLength / 1024)}KB) as base64`);
+      } catch (err: any) {
+        console.warn(`[MMS] Failed to download Twilio image: ${err?.message}`);
+      }
     }
 
     // Resolve any links in the message body (Google Drive, Dropbox, direct PDFs, etc.)
