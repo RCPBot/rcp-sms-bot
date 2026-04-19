@@ -65,10 +65,39 @@ DELIVERY & PRICING
 - Delivery fee is added as a line item on the QBO invoice (waived automatically if they qualify)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CUSTOM FABRICATION QUOTING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+You CAN quote custom fabrication yourself — do NOT say "someone will follow up." Price it at $0.75/lb.
+
+BAR WEIGHT TABLE (lb/ft):
+#3=0.376, #4=0.668, #5=1.043, #6=1.502, #7=2.044, #8=2.670, #9=3.400, #10=4.303, #11=5.313
+
+HOW TO CALCULATE CUT LENGTH:
+- Stirrups/ties (rectangular): perimeter = 2×(width + height) + hooks. Standard 135-deg seismic hook adds ~6d per end (d = bar diameter in inches). For #4: 6 × 0.5" = 3" per hook. Two hooks = 6" total. Example: 12"×24" stirrup = 2×(12+24) = 72" perimeter + 6" hooks = 78" total = 6.5 ft cut length.
+- L-shaped bars: leg1 + leg2 + hook if any
+- Straight bars: just the cut length
+- When the customer gives dimensions in inches, convert to feet (divide by 12)
+
+STEPS WHEN A CUSTOMER ORDERS CUSTOM FAB:
+1. Calculate cut length from their dimensions (show your work briefly)
+2. Calculate: total weight = qty × cut_length_ft × weight_per_ft
+3. Calculate: price = total_weight × $0.75
+4. Confirm back with the customer in this format:
+   "Custom fab: 500 #4 stirrups, 12"×24" with standard hooks
+   Cut length: 6.5 ft each
+   Total weight: 500 × 6.5 × 0.668 = 2,171 lbs
+   Price: 2,171 × $0.75 = $1,628.25
+   Does that look right?"
+5. Wait for customer to confirm — if they say yes, use [CONFIRM_ORDER]
+6. If they correct dimensions, recalculate and confirm again
+
+NEVER say you need to check with the team or that someone will follow up on fabrication pricing. You have everything you need to quote it right now.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ORDERING RULES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - Confirm the FULL order before creating an invoice (every item, qty, unit price, total + delivery fee if applicable)
-- If a product isn't listed, say you'll check stock and someone will follow up
+- For custom fabrication, always show the math (cut length, weight, price) and ask the customer to confirm
 - Ask if they want pickup or delivery early in the conversation
 - Once the customer says YES to the order summary → use tag [CONFIRM_ORDER]
 - When you have collected all required customer info → use tag [INFO_COMPLETE]
@@ -254,7 +283,7 @@ export async function processMessage(
   const response = await getClient().chat.completions.create({
     model: "gpt-4o",
     messages: chatMessages,
-    max_tokens: mediaUrls.length > 0 ? 600 : 350,
+    max_tokens: mediaUrls.length > 0 ? 600 : 450,
     temperature: 0.7,
   });
 
@@ -302,7 +331,7 @@ export async function extractOrderFromConversation(
     .map(m => `${m.direction === "inbound" ? "Customer" : "Bot"}: ${m.body}`)
     .join("\n");
 
-  const prompt = `Extract the order from this SMS conversation. Return ONLY valid JSON.
+  const prompt = `Extract the confirmed order from this SMS conversation. Return ONLY valid JSON.
 
 AVAILABLE PRODUCTS (use exact IDs):
 ${productList}
@@ -310,23 +339,32 @@ ${productList}
 CONVERSATION:
 ${conversationText}
 
+BAR WEIGHTS (lb/ft): #3=0.376, #4=0.668, #5=1.043, #6=1.502, #7=2.044, #8=2.670, #9=3.400, #10=4.303, #11=5.313
+
+FABRICATION RULES:
+- Any custom bent bars (stirrups, ties, L-bars, hooked bars, etc.) are priced at $0.75/lb
+- For fabrication items: qty = total weight in lbs, unitPrice = 0.75, amount = total_weight * 0.75
+- To get total weight: pieces * cut_length_ft * weight_per_ft
+- Use the Fabrication-1 product ID from the product list above if available
+- Set description to the full fab spec: e.g. "500 #4 stirrups 12x24 w/ std hooks — 6.5 ft cut — 2171 lbs"
+
 Return JSON in this exact format:
 {
   "lineItems": [
-    {"qboItemId": "item_id_from_list", "name": "Product Name", "qty": 5, "unitPrice": 12.50, "amount": 62.50}
+    {"qboItemId": "item_id_from_list", "name": "Product Name", "description": "optional spec detail", "qty": 5, "unitPrice": 12.50, "amount": 62.50}
   ],
   "deliveryType": "pickup" or "delivery",
   "deliveryAddress": "address if delivery",
   "notes": "any special notes"
 }
 
-If a product isn't in the list, use qboItemId "CUSTOM" and include the name. Only include items the customer explicitly ordered.`;
+Only include items the customer explicitly confirmed. If a product isn't in the list, use qboItemId "CUSTOM".`;
 
   const response = await getClient().chat.completions.create({
     model: "gpt-4o",
     messages: [{ role: "user", content: prompt }],
     response_format: { type: "json_object" },
-    max_tokens: 500,
+    max_tokens: 800,
     temperature: 0,
   });
 
