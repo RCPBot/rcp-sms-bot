@@ -114,7 +114,8 @@ export function registerRoutes(httpServer: Server, app: Express) {
         ...pdfUrls.map(u => `pdf::${u}`),
       ];
       if (newMedia.length > 0) {
-        const existing: string[] = conv.pendingImagesJson ? JSON.parse(conv.pendingImagesJson) : [];
+        const _parsedExisting = conv.pendingImagesJson ? JSON.parse(conv.pendingImagesJson) : [];
+        const existing: string[] = Array.isArray(_parsedExisting) ? _parsedExisting : [];
         const merged = [...existing, ...newMedia];
         conv = storage.updateConversation(conv.id, { pendingImagesJson: JSON.stringify(merged) });
         console.log(`[Images] Stored ${mediaUrls.length} image(s) + ${pdfUrls.length} PDF(s) — total pending: ${merged.length}`);
@@ -214,7 +215,8 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
       // ── Helper: get all stored images + PDFs for this conversation ─────────
       const allImages = (): string[] => {
-        const stored: string[] = conv.pendingImagesJson ? JSON.parse(conv.pendingImagesJson) : [];
+        const _parsed = conv.pendingImagesJson ? JSON.parse(conv.pendingImagesJson) : [];
+        const stored: string[] = Array.isArray(_parsed) ? _parsed : [];
         // merge live mediaUrls + pdfUrls (deduplicated)
         const combined = [...stored];
         for (const u of mediaUrls) { if (!combined.includes(u)) combined.push(u); }
