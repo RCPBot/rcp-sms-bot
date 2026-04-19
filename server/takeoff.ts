@@ -224,16 +224,17 @@ export async function performTakeoff(
   const imageUrls = mediaItems.filter(u => !u.startsWith("pdf::") && !u.startsWith("__"));
 
   if (pdfUrls.length > 0) {
-    // ── Use Responses API with input_file (file_id) ──────────────────────────
-    // Download the PDF ourselves, split into <40MB chunks, upload each chunk,
-    // then pass all file_ids to the Responses API.
-    // OpenAI Responses API limit: 50MB per file / 50MB total across all files.
-    const MAX_CHUNK_BYTES = 38 * 1024 * 1024; // 38MB to stay safely under 50MB limit
-    console.log(`[Takeoff] Downloading and uploading ${pdfUrls.length} PDF(s) to OpenAI Files API`);
+    // ── Use Responses API with inline base64 PDF data ────────────────────────
+    // Download the PDF, split into ≤38MB chunks using pdf-lib,
+    // then pass each chunk inline as base64 to the Responses API.
+    // This avoids the Files API entirely (no Azure download timeout).
+    const MAX_CHUNK_BYTES = 38 * 1024 * 1024;
+    console.log(`[Takeoff] Downloading ${pdfUrls.length} PDF(s) for inline processing`);
     const client = getClient();
-    const uploadedFileIds: string[] = [];
-    const { toFile } = await import("openai");
     const { PDFDocument } = await import("pdf-lib");
+
+    // Collect all ready chunks across all PDFs
+    const readyChunks: Uint8Array[] = [];
 
     for (const pdfUrl of pdfUrls) {
       console.log(`[Takeoff] Downloading PDF: ${pdfUrl.substring(0, 80)}...`);
@@ -246,23 +247,18 @@ export async function performTakeoff(
       console.log(`[Takeoff] PDF downloaded: ${pdfBuffer.length} bytes`);
 
       if (pdfBuffer.length <= MAX_CHUNK_BYTES) {
-        // Small enough — upload directly
-        const fileObj = await toFile(pdfBuffer, "plan.pdf", { type: "application/pdf" });
-        const uploaded = await client.files.create({ file: fileObj, purpose: "user_data" });
-        console.log(`[Takeoff] Uploaded chunk to OpenAI: ${uploaded.id}`);
-        uploadedFileIds.push(uploaded.id);
+        // Small enough — use as a single chunk
+        console.log(`[Takeoff] PDF fits in one chunk (${Math.round(pdfBuffer.length/1024/1024*10)/10}MB)`);
+        readyChunks.push(new Uint8Array(pdfBuffer));
       } else {
-        // Too large — split into page chunks using pdf-lib
-        // We split adaptively: if a chunk is still too big after saving, halve it.
+        // Too large — split into page chunks using pdf-lib adaptively
         console.log(`[Takeoff] PDF too large (${pdfBuffer.length} bytes), splitting into chunks...`);
         const srcPdf = await PDFDocument.load(pdfBuffer);
         const totalPages = srcPdf.getPageCount();
         console.log(`[Takeoff] PDF has ${totalPages} pages, splitting adaptively`);
 
-        // Build list of page-range segments to process (start inclusive, end exclusive)
-        // Uses a queue: if a segment's rendered PDF is too big, split it in half.
+        // Queue-based halving: if a rendered chunk is still too big, split in half
         const segments: Array<[number, number]> = [[0, totalPages]];
-        const readyChunks: Uint8Array[] = [];
 
         while (segments.length > 0) {
           const [start, end] = segments.shift()!;
@@ -274,7 +270,6 @@ export async function performTakeoff(
           const mb = Math.round(chunkBytes.length / 1024 / 1024 * 10) / 10;
 
           if (chunkBytes.length > MAX_CHUNK_BYTES && (end - start) > 1) {
-            // Still too big — split in half and re-queue
             const mid = Math.floor((start + end) / 2);
             console.log(`[Takeoff] Pages ${start + 1}-${end} = ${mb}MB > limit, halving into ${start+1}-${mid} and ${mid+1}-${end}`);
             segments.unshift([mid, end]);
@@ -284,91 +279,78 @@ export async function performTakeoff(
             readyChunks.push(chunkBytes);
           }
         }
-
-        // Upload all approved chunks
-        for (let i = 0; i < readyChunks.length; i++) {
-          const fileObj = await toFile(Buffer.from(readyChunks[i]), `plan-chunk-${i + 1}.pdf`, { type: "application/pdf" });
-          const uploaded = await client.files.create({ file: fileObj, purpose: "user_data" });
-          console.log(`[Takeoff] Uploaded chunk ${i + 1}/${readyChunks.length} to OpenAI: ${uploaded.id}`);
-          uploadedFileIds.push(uploaded.id);
-        }
       }
     }
+    console.log(`[Takeoff] ${readyChunks.length} chunk(s) ready for Responses API`);
 
-    // Process each file_id separately (Responses API 50MB total limit per request)
-    // Then merge all partial takeoff JSONs into one combined result.
+    // Process each chunk separately using inline base64 (avoids Files API timeout issues)
+    // Responses API accepts: { type: "input_file", filename, file_data: "data:application/pdf;base64,..." }
     const allPartialRaws: any[] = [];
-    try {
-      for (let i = 0; i < uploadedFileIds.length; i++) {
-        const fileId = uploadedFileIds[i];
-        console.log(`[Takeoff] Running Responses API for chunk ${i + 1}/${uploadedFileIds.length} (file: ${fileId})`);
-        const inputContent: any[] = [
-          {
-            type: "input_text",
-            text: systemPrompt,
-          },
-          {
-            type: "input_file",
-            file_id: fileId,
-          },
-          {
-            type: "input_text",
-            text: `This is chunk ${i + 1} of ${uploadedFileIds.length} from the customer's plan set (large PDFs are split into chunks). Perform a complete material takeoff for rebar, vapor barrier, chairs, forming lumber, stakes, tie wire, and anything else visible. Be thorough — examine every page carefully. Return JSON in the exact format specified.`,
-          },
-        ];
+    for (let i = 0; i < readyChunks.length; i++) {
+      const chunkBytes = readyChunks[i];
+      const b64 = Buffer.from(chunkBytes).toString("base64");
+      const mb = Math.round(chunkBytes.length / 1024 / 1024 * 10) / 10;
+      console.log(`[Takeoff] Running Responses API for chunk ${i + 1}/${readyChunks.length} (${mb}MB inline)`);
 
-        let rawText = "";
-        // Retry loop for rate limit errors
-        let attempts = 0;
-        while (attempts < 5) {
-          try {
-            const response = await client.responses.create({
-              model: "gpt-4o",
-              input: [
-                {
-                  role: "user",
-                  content: inputContent,
-                },
-              ],
-              text: { format: { type: "json_object" } },
-              max_output_tokens: 4000,
-              temperature: 0,
-            } as any);
+      const inputContent: any[] = [
+        {
+          type: "input_text",
+          text: systemPrompt,
+        },
+        {
+          type: "input_file",
+          filename: `plan-chunk-${i + 1}.pdf`,
+          file_data: `data:application/pdf;base64,${b64}`,
+        },
+        {
+          type: "input_text",
+          text: `This is chunk ${i + 1} of ${readyChunks.length} from the customer's plan set (large PDFs are split into chunks). Perform a complete material takeoff for rebar, vapor barrier, chairs, forming lumber, stakes, tie wire, and anything else visible. Be thorough — examine every page carefully. Return JSON in the exact format specified.`,
+        },
+      ];
 
-            const output = (response as any).output;
-            if (Array.isArray(output)) {
-              for (const item of output) {
-                if (item.type === "message" && Array.isArray(item.content)) {
-                  for (const part of item.content) {
-                    if (part.type === "output_text") rawText += part.text;
-                  }
+      let rawText = "";
+      // Retry loop for rate limit errors
+      let attempts = 0;
+      while (attempts < 5) {
+        try {
+          const response = await client.responses.create({
+            model: "gpt-4o",
+            input: [
+              {
+                role: "user",
+                content: inputContent,
+              },
+            ],
+            text: { format: { type: "json_object" } },
+            max_output_tokens: 4000,
+            temperature: 0,
+          } as any);
+
+          const output = (response as any).output;
+          if (Array.isArray(output)) {
+            for (const item of output) {
+              if (item.type === "message" && Array.isArray(item.content)) {
+                for (const part of item.content) {
+                  if (part.type === "output_text") rawText += part.text;
                 }
               }
             }
-            break; // success
-          } catch (err: any) {
-            if (err?.status === 429 || err?.code === 'rate_limit_exceeded') {
-              // Parse retry-after from error message, default 60s
-              const match = err?.message?.match(/(\d+\.?\d*)\s*s\b/);
-              const waitSec = match ? Math.ceil(parseFloat(match[1])) + 5 : 65;
-              console.log(`[Takeoff] Rate limited on chunk ${i + 1}, waiting ${waitSec}s before retry...`);
-              await new Promise(r => setTimeout(r, waitSec * 1000));
-              attempts++;
-            } else {
-              throw err;
-            }
+          }
+          break; // success
+        } catch (err: any) {
+          if (err?.status === 429 || err?.code === 'rate_limit_exceeded') {
+            const match = err?.message?.match(/(\d+\.?\d*)\s*s\b/);
+            const waitSec = match ? Math.ceil(parseFloat(match[1])) + 5 : 65;
+            console.log(`[Takeoff] Rate limited on chunk ${i + 1}, waiting ${waitSec}s before retry...`);
+            await new Promise(r => setTimeout(r, waitSec * 1000));
+            attempts++;
+          } else {
+            throw err;
           }
         }
-        console.log(`[Takeoff] Chunk ${i + 1} response length: ${rawText.length} chars`);
-        try { allPartialRaws.push(JSON.parse(rawText || "{}")); } catch { allPartialRaws.push({}); }
       }
-    } finally {
-      // Clean up uploaded files from OpenAI (fire-and-forget)
-      for (const fileId of uploadedFileIds) {
-        client.files.delete(fileId).catch(err =>
-          console.warn(`[Takeoff] Failed to delete OpenAI file ${fileId}: ${err?.message}`)
-        );
-      }
+      console.log(`[Takeoff] Chunk ${i + 1} response length: ${rawText.length} chars`);
+      try { allPartialRaws.push(JSON.parse(rawText || "{}")); } catch { allPartialRaws.push({}); }
     }
 
     // Merge all partial results into one combined raw takeoff
