@@ -511,24 +511,31 @@ export async function convertEstimateToInvoice(qboEstimateId: string, customerEm
 // ── Get next sequential DocNumber for invoices or estimates ────────────────────
 async function getNextDocNumber(type: "Invoice" | "Estimate"): Promise<string> {
   try {
-    const query = encodeURIComponent(`SELECT * FROM ${type} ORDERBY DocNumber DESC MAXRESULTS 1`);
+    // QBO SQL uses 'ORDER BY' with a space, not 'ORDERBY'
+    const query = encodeURIComponent(`SELECT * FROM ${type} ORDER BY DocNumber DESC MAXRESULTS 1`);
     const data = await qboGet(`/query?query=${query}`);
+    console.log(`[QBO] getNextDocNumber(${type}) raw response:`, JSON.stringify(data?.QueryResponse || {}));
     const items: any[] = data.QueryResponse?.[type] || [];
     if (items.length > 0) {
       const last = items[0].DocNumber || "";
+      console.log(`[QBO] getNextDocNumber(${type}) last DocNumber: ${last}`);
       const match = last.match(/(\d+)$/);
       if (match) {
         const maxNum = parseInt(match[1], 10);
         if (!isNaN(maxNum)) {
           const prefix = last.slice(0, last.length - match[1].length);
-          return `${prefix}${maxNum + 1}`;
+          const next = `${prefix}${maxNum + 1}`;
+          console.log(`[QBO] getNextDocNumber(${type}) -> ${next}`);
+          return next;
         }
       }
     }
   } catch (err: any) {
     console.error(`[QBO] Failed to fetch max DocNumber for ${type}:`, err?.message);
   }
-  return "10001";
+  // Fallback: start high enough to avoid collisions with existing QBO docs
+  console.warn(`[QBO] getNextDocNumber(${type}) falling back to 20000`);
+  return "20000";
 }
 
 // ── Get recent invoices for a customer ──────────────────────────────────────
