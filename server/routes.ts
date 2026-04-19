@@ -618,8 +618,22 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
       // Build line-by-line item list
       const itemLines = orderData.lineItems
-        .map(i => `  • ${i.qty > 1 ? i.qty + "x " : ""}${i.name}: $${i.amount.toFixed(2)}`)
+        .map((i: any) => {
+          if (i.qboItemId === "1010000301" || i.name === "Fabrication-1") {
+            const desc = i.description || `${Math.round(i.qty)} lbs custom fabrication`;
+            return `  • ${desc}: $${i.amount.toFixed(2)}`;
+          }
+          return `  • ${i.qty > 1 ? i.qty + "x " : ""}${i.name}: $${i.amount.toFixed(2)}`;
+        })
         .join("\n");
+
+      const fabItem = orderData.lineItems.find((i: any) => i.qboItemId === "1010000301" || i.name === "Fabrication-1");
+      const fabLbs = fabItem ? Math.round(fabItem.qty) : 0;
+      const leadTimeLine = fabLbs > 0
+        ? (fabLbs >= 3000
+          ? `\nFabrication lead time: 7–13 business days (call 469-631-7730 for updates).`
+          : `\nFabrication lead time: 4–6 business days (call 469-631-7730 — may be ready sooner).`)
+        : null;
 
       const displayInvoiceNumber = invoiceNumber || invoiceId || "pending";
       const reviewMsg = [
@@ -631,6 +645,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
         `Tax (8.25%): $${taxAmount.toFixed(2)}`,
         deliveryFee > 0 ? `Delivery: $${deliveryFee.toFixed(2)}` : null,
         `Total: $${total.toFixed(2)}`,
+        leadTimeLine,
         ``,
         `Reply LOOKS GOOD to receive your payment link, or CORRECTION if anything needs to be changed.`,
       ].filter(l => l !== null).join("\n");
