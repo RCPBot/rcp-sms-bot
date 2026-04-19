@@ -138,14 +138,17 @@ export class Storage implements IStorage {
     if (active) return active;
 
     // If a completed conversation exists, reactivate it so the customer
-    // keeps their verified status and history rather than starting over
+    // keeps their verified status and history rather than starting over.
+    // Preserve "invoiced" stage so the AI knows the invoice was already sent
+    // and the customer can ask follow-up questions without restarting ordering.
     const completed = db.select().from(conversations)
       .where(and(eq(conversations.phone, phone), eq(conversations.status, "completed")))
       .orderBy(desc(conversations.updatedAt))
       .get();
     if (completed) {
+      const nextStage = completed.stage === "invoiced" ? "invoiced" : "ordering";
       return db.update(conversations)
-        .set({ status: "active", stage: "ordering", updatedAt: new Date() })
+        .set({ status: "active", stage: nextStage, updatedAt: new Date() })
         .where(eq(conversations.id, completed.id))
         .returning().get();
     }
