@@ -225,11 +225,15 @@ export async function performTakeoff(
 
   if (pdfUrls.length > 0) {
     // ── Use Responses API with input_file (file_id) ──────────────────────────
-    // Download the PDF ourselves, upload to OpenAI Files API, then pass file_id.
-    // This avoids OpenAI needing to fetch from Dropbox (which blocks server requests).
+    // Download the PDF ourselves, split into <40MB chunks, upload each chunk,
+    // then pass all file_ids to the Responses API.
+    // OpenAI Responses API limit: 50MB per file / 50MB total across all files.
+    const MAX_CHUNK_BYTES = 38 * 1024 * 1024; // 38MB to stay safely under 50MB limit
     console.log(`[Takeoff] Downloading and uploading ${pdfUrls.length} PDF(s) to OpenAI Files API`);
     const client = getClient();
     const uploadedFileIds: string[] = [];
+    const { toFile } = await import("openai");
+    const { PDFDocument } = await import("pdf-lib");
 
     for (const pdfUrl of pdfUrls) {
       console.log(`[Takeoff] Downloading PDF: ${pdfUrl.substring(0, 80)}...`);
@@ -239,17 +243,43 @@ export async function performTakeoff(
       });
       if (!dlResp.ok) throw new Error(`HTTP ${dlResp.status} downloading PDF`);
       const pdfBuffer = Buffer.from(await dlResp.arrayBuffer());
-      console.log(`[Takeoff] PDF downloaded: ${pdfBuffer.length} bytes — uploading to OpenAI`);
+      console.log(`[Takeoff] PDF downloaded: ${pdfBuffer.length} bytes`);
 
-      // Upload to OpenAI Files API
-      const { toFile } = await import("openai");
-      const fileObj = await toFile(pdfBuffer, "plan.pdf", { type: "application/pdf" });
-      const uploaded = await client.files.create({
-        file: fileObj,
-        purpose: "user_data",
-      });
-      console.log(`[Takeoff] Uploaded to OpenAI Files API: ${uploaded.id}`);
-      uploadedFileIds.push(uploaded.id);
+      if (pdfBuffer.length <= MAX_CHUNK_BYTES) {
+        // Small enough — upload directly
+        const fileObj = await toFile(pdfBuffer, "plan.pdf", { type: "application/pdf" });
+        const uploaded = await client.files.create({ file: fileObj, purpose: "user_data" });
+        console.log(`[Takeoff] Uploaded chunk to OpenAI: ${uploaded.id}`);
+        uploadedFileIds.push(uploaded.id);
+      } else {
+        // Too large — split into page chunks using pdf-lib
+        console.log(`[Takeoff] PDF too large (${pdfBuffer.length} bytes), splitting into chunks...`);
+        const srcPdf = await PDFDocument.load(pdfBuffer);
+        const totalPages = srcPdf.getPageCount();
+        console.log(`[Takeoff] PDF has ${totalPages} pages, splitting into chunks`);
+
+        // Estimate pages per chunk: assume ~equal size distribution
+        const bytesPerPage = pdfBuffer.length / totalPages;
+        const pagesPerChunk = Math.max(1, Math.floor(MAX_CHUNK_BYTES / bytesPerPage));
+        console.log(`[Takeoff] ~${Math.ceil(bytesPerPage/1024)}KB/page → ${pagesPerChunk} pages/chunk`);
+
+        let chunkIndex = 0;
+        for (let start = 0; start < totalPages; start += pagesPerChunk) {
+          const end = Math.min(start + pagesPerChunk, totalPages);
+          const chunkPdf = await PDFDocument.create();
+          const pageIndices = Array.from({ length: end - start }, (_, i) => start + i);
+          const copiedPages = await chunkPdf.copyPagesFrom(srcPdf, pageIndices);
+          copiedPages.forEach(p => chunkPdf.addPage(p));
+          const chunkBytes = await chunkPdf.save();
+          console.log(`[Takeoff] Chunk ${chunkIndex + 1}: pages ${start + 1}-${end} (${Math.round(chunkBytes.length / 1024 / 1024 * 10) / 10}MB)`);
+
+          const fileObj = await toFile(Buffer.from(chunkBytes), `plan-chunk-${chunkIndex + 1}.pdf`, { type: "application/pdf" });
+          const uploaded = await client.files.create({ file: fileObj, purpose: "user_data" });
+          console.log(`[Takeoff] Uploaded chunk ${chunkIndex + 1} to OpenAI: ${uploaded.id}`);
+          uploadedFileIds.push(uploaded.id);
+          chunkIndex++;
+        }
+      }
     }
 
     // Build input content parts: system text + each PDF file_id + instruction
@@ -269,7 +299,7 @@ export async function performTakeoff(
 
     inputContent.push({
       type: "input_text",
-      text: `Here ${uploadedFileIds.length === 1 ? "is" : "are"} ${uploadedFileIds.length} PDF plan set(s). Please perform a complete material takeoff for rebar, vapor barrier, chairs, forming lumber, stakes, tie wire, and anything else that matches our product catalog. Be thorough — examine every page carefully.`,
+      text: `Here ${uploadedFileIds.length === 1 ? "is" : "are"} ${uploadedFileIds.length} PDF file(s) containing the customer's plan set (large PDFs are split into chunks — treat them as one continuous plan set). Please perform a complete material takeoff for rebar, vapor barrier, chairs, forming lumber, stakes, tie wire, and anything else that matches our product catalog. Be thorough — examine every page carefully.`,
     });
 
     let rawText = "";
