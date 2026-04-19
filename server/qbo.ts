@@ -11,6 +11,38 @@ const DISCOVERY_URL = "https://developer.api.intuit.com/.well-known/openid_confi
 let _accessToken: string | null = null;
 let _tokenExpiry: number = 0;
 
+export async function updateRailwayEnvVar(key: string, value: string): Promise<void> {
+  try {
+    const railwayToken = process.env.RAILWAY_TOKEN;
+    const serviceId = process.env.RAILWAY_SERVICE_ID;
+    const environmentId = process.env.RAILWAY_ENVIRONMENT_ID;
+    if (!railwayToken || !serviceId || !environmentId) {
+      console.log('[QBO] Railway env vars not configured for auto-update, skipping');
+      return;
+    }
+    const mutation = `
+      mutation variableUpsert($input: VariableUpsertInput!) {
+        variableUpsert(input: $input)
+      }
+    `;
+    const resp = await fetch('https://backboard.railway.app/graphql/v2', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${railwayToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        query: mutation,
+        variables: { input: { serviceId, environmentId, name: key, value } },
+      }),
+    });
+    const data = await resp.json();
+    console.log('[QBO] Railway env var update result:', JSON.stringify(data));
+  } catch (err: any) {
+    console.error('[QBO] Failed to update Railway env var:', err?.message);
+  }
+}
+
 function getCurrentRefreshToken(): string {
   // Prefer the rotated token persisted in SQLite; fall back to the env seed.
   const stored = storage.getSetting("qbo_refresh_token");
@@ -59,6 +91,7 @@ async function getAccessToken(): Promise<string> {
   if (data.refresh_token && data.refresh_token !== refreshToken) {
     storage.setSetting("qbo_refresh_token", data.refresh_token);
     console.log("[QBO] Refresh token rotated — persisted to SQLite settings table");
+    updateRailwayEnvVar("QBO_REFRESH_TOKEN", data.refresh_token).catch(console.error);
   }
 
   return _accessToken!;

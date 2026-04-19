@@ -4,7 +4,7 @@ import express from "express";
 import { storage } from "./storage";
 import { sendSms, isTwilioConfigured, sendPaymentLinkEmail } from "./sms";
 import { processMessage, extractOrderFromConversation, extractCustomerInfo, isAiConfigured } from "./ai";
-import { syncProducts, findOrCreateCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice } from "./qbo";
+import { syncProducts, findOrCreateCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice, updateRailwayEnvVar } from "./qbo";
 import { performTakeoff } from "./takeoff";
 import { resolveLinksFromText, extractUrls } from "./link-resolver";
 import { generateCutSheetPdf, emailCutSheet } from "./cutsheet";
@@ -25,6 +25,23 @@ async function startProductSync() {
 }
 
 export function registerRoutes(httpServer: Server, app: Express) {
+  // Register the token-export endpoint FIRST to guarantee no catch-all/static
+  // middleware can intercept it. Returns JSON of current QBO refresh token state.
+  app.get('/api/qbo/token', async (_req, res) => {
+    try {
+      const token = await storage.getSetting('qbo_refresh_token');
+      const envToken = process.env.QBO_REFRESH_TOKEN || '';
+      res.json({
+        db_token: token || null,
+        env_token: envToken ? envToken.substring(0, 20) + '...' : '(not set)',
+        source: token ? 'sqlite' : 'env',
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.use(express.urlencoded({ extended: false }));
   startProductSync();
 
@@ -1007,22 +1024,6 @@ export function registerRoutes(httpServer: Server, app: Express) {
     });
   });
 
-  // Admin: export current QBO refresh token (for saving to Railway env vars)
-  app.get('/api/qbo/token', async (req, res) => {
-    try {
-      const token = await storage.getSetting('qbo_refresh_token');
-      const envToken = process.env.QBO_REFRESH_TOKEN || '';
-      res.json({
-        db_token: token || null,
-        env_token: envToken ? envToken.substring(0, 20) + '...' : '(not set)',
-        source: token ? 'sqlite' : 'env',
-        timestamp: new Date().toISOString()
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
   // ── QBO OAuth Flow (one-time setup) ─────────────────────────────────────────
   app.get("/api/qbo/connect", (_req, res) => {
     try {
@@ -1200,7 +1201,12 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
       // Set immediately in process env so app works without restart
       process.env.QBO_REALM_ID = realmId;
-      if (tokens.refresh_token) process.env.QBO_REFRESH_TOKEN = tokens.refresh_token;
+      if (tokens.refresh_token) {
+        process.env.QBO_REFRESH_TOKEN = tokens.refresh_token;
+        storage.setSetting("qbo_refresh_token", tokens.refresh_token);
+        updateRailwayEnvVar("QBO_REFRESH_TOKEN", tokens.refresh_token).catch(console.error);
+        updateRailwayEnvVar("QBO_REALM_ID", realmId).catch(console.error);
+      }
 
       return res.json({ ok: true, realmId, refreshToken: tokens.refresh_token });
     } catch (err: any) {
@@ -1242,7 +1248,12 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
       // Set in process.env immediately so app works without restart
       process.env.QBO_REALM_ID = realmId;
-      if (tokens.refresh_token) process.env.QBO_REFRESH_TOKEN = tokens.refresh_token;
+      if (tokens.refresh_token) {
+        process.env.QBO_REFRESH_TOKEN = tokens.refresh_token;
+        storage.setSetting("qbo_refresh_token", tokens.refresh_token);
+        updateRailwayEnvVar("QBO_REFRESH_TOKEN", tokens.refresh_token).catch(console.error);
+        updateRailwayEnvVar("QBO_REALM_ID", realmId).catch(console.error);
+      }
 
       res.send(`<!DOCTYPE html><html><head><title>QuickBooks Connected</title>
         <style>body{font-family:sans-serif;max-width:600px;margin:60px auto;padding:20px;}
