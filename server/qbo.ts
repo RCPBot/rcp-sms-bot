@@ -11,11 +11,17 @@ const DISCOVERY_URL = "https://developer.api.intuit.com/.well-known/openid_confi
 let _accessToken: string | null = null;
 let _tokenExpiry: number = 0;
 
+function getCurrentRefreshToken(): string {
+  // Prefer the rotated token persisted in SQLite; fall back to the env seed.
+  const stored = storage.getSetting("qbo_refresh_token");
+  return stored || process.env.QBO_REFRESH_TOKEN || "";
+}
+
 function cfg() {
   return {
     clientId: process.env.QBO_CLIENT_ID!,
     clientSecret: process.env.QBO_CLIENT_SECRET!,
-    refreshToken: process.env.QBO_REFRESH_TOKEN!,
+    refreshToken: getCurrentRefreshToken(),
     realmId: process.env.QBO_REALM_ID!,
   };
 }
@@ -48,10 +54,11 @@ async function getAccessToken(): Promise<string> {
   _accessToken = data.access_token;
   _tokenExpiry = Date.now() + data.expires_in * 1000;
 
-  // Persist the new refresh token if rotated
+  // Persist the new refresh token if rotated — survives within the deployment
+  // so subsequent refreshes use the latest token, not the stale env seed.
   if (data.refresh_token && data.refresh_token !== refreshToken) {
-    process.env.QBO_REFRESH_TOKEN = data.refresh_token;
-    console.log("[QBO] Refresh token rotated — update QBO_REFRESH_TOKEN in your .env");
+    storage.setSetting("qbo_refresh_token", data.refresh_token);
+    console.log("[QBO] Refresh token rotated — persisted to SQLite settings table");
   }
 
   return _accessToken!;

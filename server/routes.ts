@@ -147,38 +147,20 @@ export function registerRoutes(httpServer: Server, app: Express) {
       let conv = storage.getOrCreateConversation(cleanPhone);
 
       // ── FRAUD GATE: existing customers only ──────────────────────────────────
-      // On the very first message (greeting stage, not yet verified),
-      // attempt auto-verification by matching the inbound phone against QBO.
-      if (conv.stage === "greeting" && !conv.verified) {
-        // Owner bypass — always auto-verify the owner's own number
-        const forwardPhone = (process.env.FORWARD_PHONE || "").replace(/\D/g, "");
-        const inboundDigits = cleanPhone.replace(/\D/g, "").slice(-10);
-        const forwardDigits = forwardPhone.slice(-10);
-        if (forwardDigits && inboundDigits.endsWith(forwardDigits)) {
+      if (conv.stage === "greeting" && !conv.verified && isQboConfigured()) {
+        const found = await lookupCustomerByPhone(cleanPhone);
+        if (found) {
           conv = storage.updateConversation(conv.id, {
             verified: true,
+            qboCustomerId: found.id,
+            customerName: found.name,
+            customerEmail: found.email,
+            customerCompany: found.company || null,
             stage: "ordering",
-            customerName: "Brian Maddox",
-            qboCustomerId: process.env.OWNER_QBO_ID || "2824",
           });
-          console.log(`[Verify] Owner bypass — auto-verified ${cleanPhone} as Brian Maddox`);
-        } else if (isQboConfigured()) {
-          const found = await lookupCustomerByPhone(cleanPhone);
-          if (found) {
-            // Auto-verified — pre-fill their info from QBO
-            conv = storage.updateConversation(conv.id, {
-              verified: true,
-              qboCustomerId: found.id,
-              customerName: found.name,
-              customerEmail: found.email,
-              customerCompany: found.company || null,
-              stage: "ordering",
-            });
-            console.log(`[Verify] Auto-verified ${cleanPhone} as QBO customer: ${found.name}`);
-          } else {
-            // Phone not in QBO — mark unverified, AI will handle the messaging
-            console.log(`[Verify] ${cleanPhone} not found in QBO customer list`);
-          }
+          console.log(`[Verify] Auto-verified ${cleanPhone} as QBO customer: ${found.name}`);
+        } else {
+          console.log(`[Verify] ${cleanPhone} not found in QBO customer list`);
         }
       }
 

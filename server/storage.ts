@@ -63,6 +63,10 @@ sqlite.exec(`
     active INTEGER NOT NULL DEFAULT 1,
     synced_at INTEGER
   );
+  CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS estimates (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     conversation_id INTEGER NOT NULL REFERENCES conversations(id),
@@ -117,6 +121,10 @@ export interface IStorage {
   getEstimate(id: number): Estimate | undefined;
   getEstimateByConversation(conversationId: number): Estimate | undefined;
   getAllEstimates(): Estimate[];
+
+  // Settings (key-value)
+  getSetting(key: string): string | null;
+  setSetting(key: string, value: string): void;
 }
 
 export class Storage implements IStorage {
@@ -251,6 +259,16 @@ export class Storage implements IStorage {
 
   getAllEstimates(): Estimate[] {
     return db.select().from(estimates).orderBy(desc(estimates.createdAt)).all();
+  }
+
+  // ── Settings (key-value) ────────────────────────────────────────────────────
+  getSetting(key: string): string | null {
+    const row = sqlite.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined;
+    return row?.value ?? null;
+  }
+
+  setSetting(key: string, value: string): void {
+    sqlite.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value);
   }
 }
 
