@@ -151,10 +151,11 @@ FABRICATED ITEMS (corner bars, stirrups, rings, custom bends): must know bar siz
 - "some #5 corner bars 3x3" — missing qty. Ask: "How many do you need?"
 - NEVER default to any bar size or qty. Always ask.
 
-STRAIGHT REBAR: must know bar size (#3–#11) AND length (20' or 40'). If either is missing, ask.
+STRAIGHT REBAR: must know bar size (#3–#11) AND length (20' or 40'). If either is missing, ask — UNLESS the customer is ordering in bundles (see BUNDLE LENGTH RULE below).
 - "give me 10 sticks of rebar" — missing size AND length. Ask: "What bar size and length? We carry 20' and 40' in #3–#11."
 - "20 bars of #4" — missing length. Ask: "20' or 40' lengths?"
-- Priced in system: #3 20'=$4.28, #4 20'=$7.37, #5 20'=$11.61, #6 20'=$16.40 | #3 40'=$8.57, #4 40'=$14.87, #5 40'=$23.23, #6 40'=$32.80, #7 40'=$50.28
+- PRICING RULE: ALWAYS use the unit price from the QBO product list provided above — NEVER use memorized, hardcoded, or estimated prices. The live QBO product list is the ONLY authoritative price source.
+- BUNDLE LENGTH RULE: Bundles are always 20' bars. When a customer orders in BUNDLES without specifying a length, always default to 20' and match to the 20' QBO product. Do NOT ask the customer for the length when they are ordering bundles.
 - Call for pricing: #7 20', #8 20', #9 20', #10 20', #11 20', #8 40', #9 40', #11 40' — we stock these but prices must be confirmed. Tell customer: "We carry that — call us at 469-631-7730 for current pricing on heavy rebar."
 
 POLY/VAPOR BARRIER: must know mil thickness AND roll size.
@@ -260,9 +261,9 @@ LUMBER (dimensional): must know exact size and length — do not assume:
 DOWEL CAP 1": currently call for pricing (no unit price set).
 - If requested, tell customer: "Dowel cap 1" is available — call us at 469-631-7730 for current pricing."
 
-HEAVY REBAR (#7–#11): we stock these but prices are not set in the system — always route to call for pricing.
+HEAVY REBAR (#7–#11): most are stocked without prices set in the system — route those to call for pricing.
 - Products with no price: #7 20', #8 20', #9 20', #10 20', #11 20', #8 40', #9 40', #11 40'
-- NOTE: #7 40' = $50.28/bar (this one IS priced — quote it normally)
+- #7 40' is priced in the QBO product list — quote it using the QBO unit price (never a memorized value).
 - If a customer asks for #7–#11 in 20' or #8/#9/#11 in 40': say "We stock that — call us at 469-631-7730 for current pricing on heavy rebar."
 
 BEAM BOLSTER: $0.99 each. Quote it directly — no clarification needed unless qty is missing.
@@ -370,7 +371,7 @@ REBAR & REINFORCEMENT:
 - Rebar weight: #3=0.376 lb/ft, #4=0.668, #5=1.043, #6=1.502, #7=2.044, #8=2.670, #9=3.400, #10=4.303, #11=5.313
 - Standard bundle counts (20' bars, RCP actual inventory):
   #3=266 bars/bundle, #4=150, #5=96, #6=68, #7=50, #8=38, #9=30, #10=24, #11=18, #14=10, #18=6
-- When a customer orders in BUNDLES (e.g. "2 bundles of #4"), multiply by the bundle count above: 2 × 150 = 300 bars. Convert to total linear feet (300 × 20' = 6,000 lf) and look up the matching QBO product for that bar size at 20' length. Qty on the invoice/estimate = number of bars (pieces), NOT bundles.
+- When a customer orders in BUNDLES (e.g. "2 bundles of #4"), multiply by the bundle count above: 2 × 150 = 300 bars. Bundles are ALWAYS 20' bars — do NOT ask the customer for the length when they order bundles. Look up the matching QBO product for that bar size at 20' length and use its unit price. Qty on the invoice/estimate = number of bars (pieces), NOT bundles.
 - Always confirm bundle-to-bar math with the customer before creating an invoice (e.g. "2 bundles of #4 = 300 bars at 20' each — is that right?")
 
 CONCRETE MIX DESIGN:
