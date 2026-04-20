@@ -504,21 +504,19 @@ export function registerRoutes(httpServer: Server, app: Express) {
   async function handleOrderConfirmation(conversationId: number, phone: string) {
     const conv = storage.getConversation(conversationId);
     if (!conv) return;
-    // Guard: prevent duplicate invoice creation while mid-review of a pending invoice.
-    // Note: stage === "invoiced" is NOT a terminal state — customer may place another
-    // order in the same conversation, which will create a new invoice.
-    if (conv.stage === "invoice_review") {
-      console.log(`[Order] Skipping handleOrderConfirmation — awaiting LOOKS GOOD/CORRECTION in stage: ${conv.stage}`);
-      return;
-    }
+    // Guard: prevent concurrent duplicate invoice creation only if another
+    // handleOrderConfirmation is already mid-flight for this conversation.
+    // Stage alone ("invoice_review" or "invoiced") must NOT short-circuit — the
+    // customer is free to place additional orders in the same conversation.
     if (orderConfirmationInProgress.has(conversationId)) {
       console.log(`[Order] Skipping — order confirmation already in progress for conv ${conversationId}`);
       return;
     }
-    // Reset stage to "ordering" if the previous invoice was already finalized —
-    // this lets downstream logic treat the new invoice as a fresh flow.
-    if (conv.stage === "invoiced") {
-      storage.updateConversation(conversationId, { stage: "ordering" });
+    // Reset stage to "ordering" if a previous invoice was finalized or is under
+    // review — this lets the new order proceed as a fresh flow.
+    if (conv.stage === "invoiced" || conv.stage === "invoice_review") {
+      console.log(`[Order] Resetting stage "${conv.stage}" → "ordering" for new order (conv ${conversationId})`);
+      storage.updateConversation(conversationId, { stage: "ordering", pendingImagesJson: null });
     }
     orderConfirmationInProgress.add(conversationId);
     try {

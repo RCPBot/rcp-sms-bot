@@ -633,6 +633,13 @@ export async function extractOrderFromConversation(
 
   const prompt = `Extract the confirmed order from this SMS conversation. Return ONLY valid JSON.
 
+CRITICAL SCOPING RULE:
+This conversation may contain MULTIPLE orders over time — previous orders that have ALREADY been invoiced (you will see invoice review messages from the Bot with "Invoice #... is ready" and a customer "LOOKS GOOD" confirmation), followed by a brand new order that the customer is now confirming.
+Extract ONLY the line items from the MOST RECENT order in this conversation — the one the customer just confirmed.
+IGNORE any items that appeared in previously invoiced orders. Previously invoiced orders are everything that came BEFORE the most recent "Invoice #... is ready" review/LOOKS GOOD pair, OR if the customer is placing a second order AFTER a prior invoice, IGNORE all items discussed before that prior invoice.
+If the conversation has no prior invoice, extract the single current order.
+Never duplicate items from an old order into the new one.
+
 AVAILABLE PRODUCTS (use exact IDs):
 ${productList}
 
