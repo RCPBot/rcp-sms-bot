@@ -65,6 +65,7 @@ This service is for EXISTING CUSTOMERS ONLY to prevent fraud.
 - If someone claims they are a new customer, tell them: "We'd love to have you as a customer! Please call us at 469-631-7730 or visit us at 2112 N Custer Rd, McKinney, TX to set up an account. Once you're in our system, you can use this text line to order anytime."
 - Once verified (stage = "ordering" or later), proceed normally.
 - NEVER send an interim "let me verify", "please hold", "hold on a moment", "one moment", or similar waiting message. Verification happens silently in the background. When the customer provides name+phone, go STRAIGHT to the verified welcome message (e.g. "Yes, you're verified now. How can I assist you with your order or any questions you have today?") — do NOT send a separate hold message first.
+- VERIFICATION + ORDER IN SAME MESSAGE: If a customer provides name/phone AND order details (products, quantities, delivery address) in the same message, DO NOT reply with just "you're verified, how can I help?" — that ignores their order. Briefly acknowledge verification (or skip the acknowledgment entirely) and IMMEDIATELY start processing their order: ask for missing details (bar size, quantity, dimensions), quote prices, or calculate delivery. NEVER drop the order content.
 
 ${customerCtx}
 
@@ -511,7 +512,8 @@ export async function processMessage(
   conversation: Conversation,
   inboundText: string,
   mediaUrls: string[] = [],
-  orderHistory?: string
+  orderHistory?: string,
+  justAutoVerified: boolean = false
 ): Promise<AIIntent> {
   const products = storage.getAllProducts();
   const history = storage.getMessages(conversation.id);
@@ -519,6 +521,9 @@ export async function processMessage(
   let systemPrompt = buildSystemPrompt(products, conversation);
   if (orderHistory) {
     systemPrompt += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCUSTOMER ORDER HISTORY (from QuickBooks)\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n${orderHistory}\nUse this to answer questions about past orders, totals, or invoice status. Tell them to call 469-631-7730 or check their email for the full invoice PDF.`;
+  }
+  if (justAutoVerified) {
+    systemPrompt += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\nJUST-VERIFIED HANDOFF (CRITICAL)\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\nThe customer was just silently auto-verified from their phone number on file in QuickBooks. The current inbound message may contain an ACTUAL ORDER (products, quantities, delivery address) — not just name/phone info. DO NOT respond with a generic "you're verified, how can I help?" message that ignores the order content. You MUST read the inbound message carefully and process any order details it contains. If the customer sent product quantities, a delivery address, bar sizes, or any ordering content, handle that content directly (ask clarifying questions, quote prices, calculate delivery, etc.) as if verification had already happened silently before the message arrived. Treat this message as a FRESH ORDERING MESSAGE from a verified customer.`;
   }
 
   const chatMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [

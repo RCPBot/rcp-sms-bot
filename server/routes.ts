@@ -178,6 +178,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
       let conv = storage.getOrCreateConversation(cleanPhone);
 
       // ── FRAUD GATE: existing customers only ──────────────────────────────────
+      let justAutoVerified = false;
       if (conv.stage === "greeting" && !conv.verified && isQboConfigured()) {
         const found = await lookupCustomerByPhone(cleanPhone);
         if (found) {
@@ -189,6 +190,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
             customerCompany: found.company || null,
             stage: "ordering",
           });
+          justAutoVerified = true;
           console.log(`[Verify] Auto-verified ${cleanPhone} as QBO customer: ${found.name}`);
         } else {
           console.log(`[Verify] ${cleanPhone} not found in QBO customer list`);
@@ -363,7 +365,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
       }
 
       // Handle the message with AI (pass image URLs if any)
-      const intent = await processMessage(conv, cleanBody, mediaUrls);
+      const intent = await processMessage(conv, cleanBody, mediaUrls, undefined, justAutoVerified);
 
       // ── Handle delivery fee calculation ───────────────────────────────────────
       if (intent.type === "calc_delivery") {
