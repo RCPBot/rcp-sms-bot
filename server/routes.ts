@@ -326,8 +326,10 @@ export function registerRoutes(httpServer: Server, app: Express) {
       };
 
       // ── Auto-detect plan set: 3+ images OR any PDF sent → run takeoff ───────
-      // Only run if not already mid-estimate or invoiced — prevents re-running on follow-up messages
-      if ((mediaUrls.length >= 3 || pdfUrls.length >= 1) && conv.verified && conv.stage !== "takeoff_pending" && conv.stage !== "estimating" && conv.stage !== "invoice_review" && conv.stage !== "invoiced") {
+      // Only run if not already mid-estimate — prevents re-running on follow-up messages.
+      // Note: stage "invoiced" is allowed so a customer can run a second takeoff after
+      // their first invoice is complete.
+      if ((mediaUrls.length >= 3 || pdfUrls.length >= 1) && conv.verified && conv.stage !== "takeoff_pending" && conv.stage !== "estimating" && conv.stage !== "invoice_review") {
         await handlePlanTakeoff(conv.id, cleanPhone, allImages(), rawPlanUrl);
         return;
       }
@@ -488,14 +490,21 @@ export function registerRoutes(httpServer: Server, app: Express) {
   async function handleOrderConfirmation(conversationId: number, phone: string) {
     const conv = storage.getConversation(conversationId);
     if (!conv) return;
-    // Guard: prevent duplicate invoice creation if already processing or done
-    if (conv.stage === "invoice_review" || conv.stage === "invoiced") {
-      console.log(`[Order] Skipping handleOrderConfirmation — already in stage: ${conv.stage}`);
+    // Guard: prevent duplicate invoice creation while mid-review of a pending invoice.
+    // Note: stage === "invoiced" is NOT a terminal state — customer may place another
+    // order in the same conversation, which will create a new invoice.
+    if (conv.stage === "invoice_review") {
+      console.log(`[Order] Skipping handleOrderConfirmation — awaiting LOOKS GOOD/CORRECTION in stage: ${conv.stage}`);
       return;
     }
     if (orderConfirmationInProgress.has(conversationId)) {
       console.log(`[Order] Skipping — order confirmation already in progress for conv ${conversationId}`);
       return;
+    }
+    // Reset stage to "ordering" if the previous invoice was already finalized —
+    // this lets downstream logic treat the new invoice as a fresh flow.
+    if (conv.stage === "invoiced") {
+      storage.updateConversation(conversationId, { stage: "ordering" });
     }
     orderConfirmationInProgress.add(conversationId);
     try {
@@ -586,7 +595,10 @@ export function registerRoutes(httpServer: Server, app: Express) {
           phone: conv.phone,
           company: conv.customerCompany || undefined,
         });
-        storage.updateConversation(conversationId, { qboCustomerId, stage: "invoiced" });
+        // Only persist qboCustomerId here — stage transitions to "invoice_review"
+        // below after the invoice is actually created, and to "invoiced" only after
+        // the customer replies LOOKS GOOD.
+        storage.updateConversation(conversationId, { qboCustomerId });
       }
 
       // Create invoice in QBO
