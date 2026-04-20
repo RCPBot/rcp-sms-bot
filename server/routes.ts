@@ -291,6 +291,18 @@ export function registerRoutes(httpServer: Server, app: Express) {
         }
       }
 
+      // ── Reset stage when a new message arrives after an invoice was finalized ──
+      // Once stage reaches "invoiced" the customer is free to start a second order.
+      // Any follow-up text (that isn't a trailing LOOKS GOOD retry) should be treated
+      // as a fresh ordering flow so downstream guards don't short-circuit on stage.
+      if (conv.stage === "invoiced") {
+        const LOOKS_GOOD_RETRY = /^(looks? good|approve[d]?)[\.!]?$/i;
+        if (!LOOKS_GOOD_RETRY.test(cleanBody.trim())) {
+          console.log(`[Stage] Resetting stage "invoiced" → "ordering" for conv ${conv.id} (new message after finalized invoice)`);
+          conv = storage.updateConversation(conv.id, { stage: "ordering" });
+        }
+      }
+
       // ── Shortcut: APPROVE keyword from customer ────────────────────────────
       if (conv.stage === "estimating" && cleanBody.trim().toUpperCase() === "APPROVE") {
         const est = storage.getEstimateByConversation(conv.id);
