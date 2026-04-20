@@ -83,6 +83,7 @@ DELIVERY & PRICING
 - Once they provide it, use the tag [CALC_DELIVERY: full address here] to trigger the distance calculation
 - The system will calculate exact mileage and feed it back; then quote the customer with the free delivery offer if applicable
 - Delivery fee is added as a line item on the QBO invoice (waived automatically if they qualify)
+- DELIVERY ADDRESS RULE: Before calculating a delivery fee, you MUST have a complete address including: street number, street name, city, and state (or zip code). If the customer provides only a street name/number without a city and state (e.g. "3127 Briar Ridge" or "123 Main St"), you MUST ask them to confirm the full delivery address including city and state BEFORE attempting to calculate distance or delivery fee. Example response: "Can you confirm the full delivery address including city and state? For example: 3127 Briar Ridge, McKinney, TX 75071"
 
 DELIVERY DETAILS (collect before creating invoice):
 After confirming the delivery address and fee, you MUST also ask the customer:

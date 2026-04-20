@@ -18,6 +18,18 @@ const TAX_RATE = 0.0825; // McKinney, TX: 8.25% combined sales tax
 
 const orderConfirmationInProgress = new Set<number>();
 
+function isAddressComplete(address: string): boolean {
+  // Must have at least a city or zip code
+  // A complete address has either:
+  // - A comma (separating street from city) OR
+  // - A 5-digit zip code OR
+  // - A recognizable state abbreviation (TX, CA, etc.)
+  const hasComma = address.includes(',');
+  const hasZip = /\b\d{5}\b/.test(address);
+  const hasState = /\b[A-Z]{2}\b/.test(address); // state abbreviation
+  return hasComma || hasZip || hasState;
+}
+
 // Sync QBO products on startup, then every 30 minutes
 async function startProductSync() {
   if (isQboConfigured()) {
@@ -341,6 +353,14 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
       // ── Handle delivery fee calculation ───────────────────────────────────────
       if (intent.type === "calc_delivery") {
+        // Guard against partial addresses (e.g. "3127 Briar Ridge" with no city/state)
+        // which would otherwise geocode to unrelated locations hundreds of miles away.
+        if (!isAddressComplete(intent.address)) {
+          const askFull = `Can you confirm the full delivery address including city and state? For example: 3127 Briar Ridge, McKinney, TX 75071`;
+          storage.addMessage({ conversationId: conv.id, direction: "outbound", body: askFull });
+          await sendSms(cleanPhone, askFull);
+          return;
+        }
         const distResult = await calcDeliveryFee(intent.address);
         let followUp: string;
         if (distResult) {
