@@ -84,6 +84,14 @@ DELIVERY & PRICING
 - The system will calculate exact mileage and feed it back; then quote the customer with the free delivery offer if applicable
 - Delivery fee is added as a line item on the QBO invoice (waived automatically if they qualify)
 
+DELIVERY DETAILS (collect before creating invoice):
+After confirming the delivery address and fee, you MUST also ask the customer:
+1. What day would you like your delivery?
+2. What time works best? (e.g. morning, afternoon, or a specific time)
+3. Is there a site contact name and phone number we should call when we arrive?
+Collect all three before asking "Shall I create your invoice?" — include them in your order summary. If the customer skips any, ask once more then proceed with what you have.
+Format the collected info as notes like: "Requested delivery: [day], [time]. Site contact: [name] [phone]"
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CLARIFICATION RULES (CRITICAL — READ FIRST)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -641,7 +649,7 @@ Return JSON in this exact format:
   ],
   "deliveryType": "pickup" or "delivery",
   "deliveryAddress": "address if delivery",
-  "notes": "any special notes"
+  "notes": "Combine ALL delivery details here in one string: requested delivery day, requested time, site contact name and phone. Example: 'Requested delivery: Tuesday morning. Site contact: John Smith 214-555-1234.' If any detail was not provided, omit it."
 }
 
 Only include items the customer explicitly confirmed. If a product isn't in the list, use qboItemId "CUSTOM".

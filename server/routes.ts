@@ -587,10 +587,12 @@ export function registerRoutes(httpServer: Server, app: Express) {
           deliveryFee: deliveryFee > 0 ? deliveryFee : undefined,
           deliveryMiles,
           deliveryAddress: cleanDeliveryAddress || undefined,
+          deliveryNotes: orderData.notes || undefined,
           customerMemo: [
             cleanDeliveryAddress ? `Ship to: ${cleanDeliveryAddress}` : null,
             orderData.notes || null,
-          ].filter(Boolean).join(" | ") + customInvoiceNote || undefined,
+            customInvoiceNote || null,
+          ].filter(Boolean).join(" | ") || undefined,
         });
         invoiceId = invoice.invoiceId;
         invoiceNumber = invoice.invoiceNumber;

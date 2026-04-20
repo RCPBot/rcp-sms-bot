@@ -296,6 +296,7 @@ export async function createInvoice(params: {
   deliveryFee?: number;
   deliveryMiles?: number;
   deliveryAddress?: string;
+  deliveryNotes?: string;
   customerMemo?: string;
 }): Promise<{ invoiceId: string; invoiceNumber: string; paymentLink: string | null }> {
   const lines: any[] = params.lineItems.map((item, idx) => ({
@@ -341,7 +342,10 @@ export async function createInvoice(params: {
     invoiceBody.CustomerMemo = { value: params.customerMemo };
   }
   if (params.deliveryAddress) {
-    invoiceBody.ShipAddr = { Line1: params.deliveryAddress };
+    invoiceBody.ShipAddr = {
+      Line1: params.deliveryAddress,
+      ...(params.deliveryNotes ? { Line2: params.deliveryNotes } : {}),
+    };
   }
 
   const data = await qboPostWithDocRetry("/invoice", invoiceBody);
