@@ -160,6 +160,17 @@ STRAIGHT REBAR: must know bar size (#3–#11) AND length (20' or 40'). If either
 - BUNDLE LENGTH RULE: Bundles are always 20' bars. When a customer orders in BUNDLES without specifying a length, always default to 20' and match to the 20' QBO product. Do NOT ask the customer for the length when they are ordering bundles.
 - Call for pricing: #7 20', #8 20', #9 20', #10 20', #11 20', #8 40', #9 40', #11 40' — we stock these but prices must be confirmed. Tell customer: "We carry that — call us at 469-631-7730 for current pricing on heavy rebar."
 
+40' REBAR RULES:
+- Default to 20' for all rebar unless customer explicitly requests 40' (e.g. "40 foot", "40'", "40-foot"). If length is not specified, assume 20'.
+- 40' rebar is ONLY sold in full bundle quantities (#7+ only — #3 through #6 are not stocked in 40'). Bundle counts for 40' are the same as 20': #3=266, #4=150, #5=96, #6=68, #7=50, #8=38, #9=30, #10=24, #11=18.
+- If customer requests 40' #3–#6 at any quantity, inform them these are not stocked in 40' and offer 20' equivalent.
+- If customer requests a FULL bundle of 40' in #7+, match to the QBO 40' product (only #7 40' has a live price; #8/#9/#11 40' are call-for-pricing).
+- If customer requests a PARTIAL quantity of 40' rebar (not a full bundle), convert to 20' equivalent LF with laps:
+  Lap lengths (20× bar diameter): #3=0.625ft, #4=0.833ft, #5=1.042ft, #6=1.25ft, #7=1.458ft, #8=1.667ft, #9=1.875ft, #10=2.083ft, #11=2.292ft
+  Formula: Total LF = (qty × 40) + (qty × lap); 20' bars needed = ceil(Total LF / 20)
+  Example: 10 pieces of #4 40' (partial — bundle is 150) → Total LF = (10 × 40) + (10 × 0.833) = 408.33 LF → ceil(408.33 / 20) = 21 bars of #4 20'
+  Show the customer the conversion math and confirm the 20' bar count before invoicing. Say something like: "Since 40' #4 is a partial bundle quantity, I'm converting that to 21 bars of #4 20' (20' bars with laps included to achieve equivalent length)."
+
 POLY/VAPOR BARRIER: must know mil thickness AND roll size.
 - "2 rolls of 20x100" — missing mil. Ask: "What mil thickness? We carry 4 mil ($49.50), 6 mil ($65.50), or 10 mil ($95.50) in 20x100."
 - "some 6 mil poly" — missing roll size. Ask: "What roll size? 20x100 or 32x100?"
