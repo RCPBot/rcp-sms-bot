@@ -4,10 +4,10 @@ import express from "express";
 import { storage } from "./storage";
 import { sendSms, isTwilioConfigured, sendPaymentLinkEmail } from "./sms";
 import { processMessage, extractOrderFromConversation, extractCustomerInfo, isAiConfigured } from "./ai";
-import { syncProducts, findOrCreateCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice, updateRailwayEnvVar, setLiveRefreshToken } from "./qbo";
+import { syncProducts, findOrCreateCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice, updateRailwayEnvVar, setLiveRefreshToken, getOrCreateBotCustomer } from "./qbo";
 import { performTakeoff } from "./takeoff";
 import { resolveLinksFromText, extractUrls } from "./link-resolver";
-import { generateCutSheetPdf, emailCutSheet, emailCutSheetToCustomer, generatePlacementDrawingPdf } from "./cutsheet";
+import { generateCutSheetPdf, emailCutSheet, emailCutSheetToCustomer, generatePlacementDrawingPdf, forwardPlansToOffice, generateBidPdf, emailBidPdf, OFFICE_EMAIL } from "./cutsheet";
 import type { LineItem } from "@shared/schema";
 import * as fs from "fs";
 import * as path from "path";
@@ -17,6 +17,49 @@ const OWNER_EMAIL = "maddoxconstruction1987@gmail.com";
 const TAX_RATE = 0.0825; // McKinney, TX: 8.25% combined sales tax
 
 const orderConfirmationInProgress = new Set<number>();
+
+// Best-effort parser for "project name + delivery address" customer replies.
+// Handles:
+//   "Project: Ascension Cottages, 123 Main St, McKinney TX 75071"
+//   "Project name is Ascension Cottages. Address 123 Main St, McKinney TX"
+//   "Ascension Cottages — 123 Main St, McKinney, TX 75071"
+//   "123 Main St, McKinney TX 75071"    (address only)
+function parseProjectInfo(raw: string): { name?: string; address?: string } {
+  const text = (raw || "").trim();
+  if (!text) return {};
+
+  let name: string | undefined;
+  let address: string | undefined;
+
+  // 1. Explicit labels
+  const nameMatch = text.match(/(?:project(?:\s*name)?|job(?:site)?(?:\s*name)?|site)\s*(?:is|:|=|-)\s*([^,\n.]+)/i);
+  if (nameMatch) name = nameMatch[1].trim();
+  const addrMatch = text.match(/(?:(?:delivery|project|site|job(?:site)?)\s*address|address|addr)\s*(?:is|:|=|-)\s*(.+)/i);
+  if (addrMatch) address = addrMatch[1].trim();
+
+  // 2. Find a street-number-led address anywhere in the text
+  if (!address) {
+    const streetLike = text.match(/\b\d{1,6}\s+[A-Za-z][A-Za-z0-9.\s]*?(?:St|Street|Rd|Road|Ave|Avenue|Blvd|Boulevard|Ln|Lane|Dr|Drive|Ct|Court|Hwy|Highway|Pkwy|Parkway|Way|Cir|Circle|Ter|Terrace|Pl|Place)\b[^\n]*/i);
+    if (streetLike) address = streetLike[0].trim();
+  }
+
+  // 3. Split on em-dash / " - " / " — " for "Name — Address" pattern
+  if (!name) {
+    const dash = text.split(/\s[—–-]\s/);
+    if (dash.length >= 2 && /\d/.test(dash[1])) {
+      const candidate = dash[0].trim();
+      if (candidate.length > 2 && candidate.length < 80 && !/\d{3,}/.test(candidate)) {
+        name = candidate;
+      }
+    }
+  }
+
+  // Clean up any trailing punctuation
+  if (name) name = name.replace(/[.,;:]+$/, "").trim();
+  if (address) address = address.replace(/[.;]+$/, "").trim();
+
+  return { name, address };
+}
 
 function isAddressComplete(address: string): boolean {
   // Must have at least a city or zip code
@@ -161,7 +204,36 @@ export function registerRoutes(httpServer: Server, app: Express) {
     if (mmsPdfUrls.length > 0) {
       pdfUrls.push(...mmsPdfUrls);
       console.log(`[MMS] Added ${mmsPdfUrls.length} MMS PDF(s) to pdfUrls`);
+    }
 
+    // ── Forward plans to office email (MMS PDFs + any plan links in message) ──
+    // Fires whenever a customer sends a PDF (MMS) or a plan link (Dropbox/Drive).
+    // Fire-and-forget: never block the webhook response.
+    const linkUrls = cleanBody ? extractUrls(cleanBody) : [];
+    const customerGotPlans = mmsPdfUrls.length > 0 || pdfUrls.length > 0;
+    if (customerGotPlans) {
+      try {
+        const existingConvForForward = storage.getConversationByPhone(cleanPhone);
+        const mmsLocalPaths = mmsPdfUrls
+          .map(u => {
+            const m = u.match(/\/api\/tmp\/(.+)$/);
+            return m ? path.join(os.tmpdir(), m[1]) : null;
+          })
+          .filter((p): p is string => !!p);
+        forwardPlansToOffice({
+          customerName: existingConvForForward?.customerName || "Unknown Customer",
+          customerPhone: cleanPhone,
+          originalMessage: cleanBody,
+          projectDetails: existingConvForForward?.projectName || "",
+          pdfPaths: mmsLocalPaths,
+          planLinks: linkUrls.length > 0 ? linkUrls : undefined,
+        }).catch(e => console.error("[PlanForward] fire-and-forget error:", e));
+      } catch (forwardErr: any) {
+        console.error(`[PlanForward] error preparing forward: ${forwardErr?.message}`);
+      }
+    }
+
+    if (mmsPdfUrls.length > 0) {
       // ── Trigger takeoff IMMEDIATELY after MMS PDF download completes ─────
       // Must fire here (inside the async download scope) because the early
       // trigger further down can race or be bypassed by other gating logic.
@@ -184,7 +256,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
             pendingImagesJson: JSON.stringify(mmsPdfUrls.map(u => `pdf::${u}`)),
           });
 
-          const ack = "Got your plan set! Give me a moment to read it and build your cut sheet and placement drawing...";
+          const ack = "Got your plans! I've forwarded them to our team for a detailed takeoff. We'll have your preliminary estimate ready shortly. In the meantime, can you provide the project name and delivery address so we can prepare your quote?";
           storage.addMessage({ conversationId: existingConv.id, direction: "outbound", body: ack });
           try { await sendSms(cleanPhone, ack); } catch (smsErr: any) {
             console.warn(`[MMS] Ack SMS failed: ${smsErr?.message}`);
@@ -279,6 +351,38 @@ export function registerRoutes(httpServer: Server, app: Express) {
         direction: "inbound",
         body: bodyWithMedia,
       });
+
+      // ── Capture project name/address from customer reply after plan upload ───
+      // If the customer has plans in flight (stage = plan_processing / estimating
+      // / takeoff_pending, OR has pending PDFs) and hasn't given us project info
+      // yet, parse this text for "project name" + a delivery/job-site address.
+      if (
+        cleanBody &&
+        pdfUrls.length === 0 && // this message isn't itself a plan upload
+        (!conv.projectName || !conv.projectAddress)
+      ) {
+        const pendingHasPdf = (() => {
+          try {
+            const p = conv.pendingImagesJson ? JSON.parse(conv.pendingImagesJson) : [];
+            return Array.isArray(p) && p.some((u: any) => typeof u === "string" && u.startsWith("pdf::"));
+          } catch { return false; }
+        })();
+        const planInFlight =
+          conv.stage === "plan_processing" ||
+          conv.stage === "takeoff_pending" ||
+          conv.stage === "estimating" ||
+          pendingHasPdf;
+        if (planInFlight) {
+          const parsed = parseProjectInfo(cleanBody);
+          const updates: { projectName?: string; projectAddress?: string } = {};
+          if (parsed.name && !conv.projectName) updates.projectName = parsed.name;
+          if (parsed.address && !conv.projectAddress) updates.projectAddress = parsed.address;
+          if (Object.keys(updates).length > 0) {
+            conv = storage.updateConversation(conv.id, updates);
+            console.log(`[Project] Captured project info for conv ${conv.id}:`, updates);
+          }
+        }
+      }
 
       // ── Early trigger: verified customer sent a PDF → run takeoff NOW ────────
       // This must fire before any other handler so the PDF message isn't also
@@ -855,15 +959,17 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
       const subtotal = takeoffResult.lineItems.reduce((s, i) => s + i.amount, 0);
 
-      let qboCustomerId = conv.qboCustomerId;
-      if (!qboCustomerId && conv.customerEmail && conv.customerName) {
-        qboCustomerId = await findOrCreateCustomer({
-          name: conv.customerName!,
-          email: conv.customerEmail!,
-          phone: conv.phone,
-          company: conv.customerCompany || undefined,
-        });
-        storage.updateConversation(conversationId, { qboCustomerId });
+      // Plan takeoffs always go to the special "BOT" QBO customer — not the
+      // conversation's own customer record. This keeps bid/preliminary estimates
+      // separate from the customer's actual order history.
+      let qboCustomerId: string | null = null;
+      if (isQboConfigured()) {
+        try {
+          qboCustomerId = await getOrCreateBotCustomer();
+        } catch (err) {
+          console.error("[Takeoff] Failed to get BOT customer — falling back to conversation customer:", err);
+          qboCustomerId = conv.qboCustomerId || null;
+        }
       }
 
       let estimateId = "";
@@ -885,11 +991,17 @@ export function registerRoutes(httpServer: Server, app: Express) {
         const customNote = customItems.length > 0
           ? `\n\nUnmatched items (price TBD):\n${customItems.map(i => `- ${i.name}${i.description ? ": " + i.description : ""}`).join("\n")}`
           : "";
+        const projectName = conv.projectName || takeoffResult.projectName;
+        const projectAddress = conv.projectAddress || "";
+        const shipMemo = projectAddress
+          ? `${projectName}\n${projectAddress}`
+          : projectName;
         const est = await createEstimate({
           customerId: qboCustomerId,
-          customerEmail: conv.customerEmail!,
+          customerEmail: conv.customerEmail || OFFICE_EMAIL,
           lineItems: qboLineItems as LineItem[],
-          customerMemo: `Plan takeoff — ${takeoffResult.projectName}. Auto-generated by RCP SMS Bot.${customNote}`,
+          customerMemo: `Preliminary estimate — bidding purposes only. +/-5% contingency included.\nProject: ${projectName}${projectAddress ? `\nAddress: ${projectAddress}` : ""}${customNote}`,
+          deliveryAddress: shipMemo,
         });
         estimateId = est.estimateId;
         estimateNumber = est.estimateNumber;
@@ -909,39 +1021,37 @@ export function registerRoutes(httpServer: Server, app: Express) {
         status: estimateId ? "sent" : "pending",
       });
 
-      // Build + email cut sheet + placement drawing PDFs to the customer (with owner CC)
-      // right after takeoff. Fire-and-forget: SMS estimate still goes out even if email fails.
-      if (takeoffResult.fabItems && takeoffResult.fabItems.length > 0 && conv.customerEmail) {
-        try {
-          const pdfPath = generateCutSheetPdf({
-            projectName: takeoffResult.projectName,
+      // Build + email branded bid/estimate PDF to customer AND office.
+      // Fire-and-forget: SMS estimate still goes out even if PDF/email fails.
+      try {
+        const bidProjectName = conv.projectName || takeoffResult.projectName;
+        const bidEstimateNumber = estimateNumber || String(savedEstimate.id);
+        const bidPdfPath = await generateBidPdf({
+          lineItems: takeoffResult.lineItems.map(i => ({
+            name: i.name,
+            description: i.description,
+            qty: i.qty,
+            unitPrice: i.unitPrice,
+            amount: i.amount,
+          })),
+          fabItems: takeoffResult.fabItems,
+          projectInfo: {
+            projectName: bidProjectName,
+            projectAddress: conv.projectAddress || "",
             customerName: conv.customerName || conv.phone,
-            estimateNumber: estimateNumber || String(savedEstimate.id),
-            fabItems: takeoffResult.fabItems,
-          });
-          let placementPdfPath: string | undefined;
-          try {
-            placementPdfPath = await generatePlacementDrawingPdf({
-              projectName: takeoffResult.projectName,
-              customerName: conv.customerName || conv.phone,
-              estimateNumber: estimateNumber || String(savedEstimate.id),
-              fabItems: takeoffResult.fabItems,
-            });
-          } catch (placementErr) {
-            console.error("[Takeoff] Placement drawing generation failed:", placementErr);
-          }
-          await emailCutSheetToCustomer({
-            pdfPath,
-            placementPdfPath,
-            projectName: takeoffResult.projectName,
-            customerName: conv.customerName || conv.phone,
-            customerEmail: conv.customerEmail,
-            estimateNumber: estimateNumber || undefined,
-            ownerEmail: OWNER_EMAIL,
-          });
-        } catch (pdfErr) {
-          console.error("[Takeoff] Customer cut sheet email failed:", pdfErr);
-        }
+            estimateNumber: bidEstimateNumber,
+          },
+          taxRate: TAX_RATE,
+        });
+        await emailBidPdf({
+          pdfPath: bidPdfPath,
+          projectName: bidProjectName,
+          customerName: conv.customerName || conv.phone,
+          customerEmail: conv.customerEmail || undefined,
+          estimateNumber: bidEstimateNumber,
+        });
+      } catch (pdfErr) {
+        console.error("[Takeoff] Branded bid PDF generation/email failed:", pdfErr);
       }
 
       const items = takeoffResult.lineItems;
@@ -969,9 +1079,9 @@ export function registerRoutes(httpServer: Server, app: Express) {
       const estimateTotal = subtotal + estimateTax;
       const taxLine = `\nTax (8.25%): $${estimateTax.toFixed(2)}\nEstimated Total: $${estimateTotal.toFixed(2)}`;
 
-      const cutSheetNote = (takeoffResult.fabItems && takeoffResult.fabItems.length > 0 && conv.customerEmail)
-        ? `\n\nYour cut sheet and placement drawing have been sent to ${conv.customerEmail}. Creating your estimate now...`
-        : "";
+      const cutSheetNote = conv.customerEmail
+        ? `\n\nYour branded preliminary estimate PDF has been emailed to ${conv.customerEmail} and our office.`
+        : `\n\nYour preliminary estimate PDF has been sent to our office at ${OFFICE_EMAIL}.`;
 
       let replyText: string;
       if (estimateLink) {

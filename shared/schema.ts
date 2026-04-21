@@ -10,6 +10,8 @@ export const conversations = sqliteTable("conversations", {
   customerEmail: text("customer_email"),
   customerCompany: text("customer_company"),
   deliveryAddress: text("delivery_address"),
+  projectName: text("project_name"),
+  projectAddress: text("project_address"),
   qboCustomerId: text("qbo_customer_id"),
   verified: integer("verified", { mode: "boolean" }).notNull().default(false), // true = confirmed existing QBO customer
   status: text("status").notNull().default("active"), // active | completed | abandoned

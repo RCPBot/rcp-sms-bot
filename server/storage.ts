@@ -87,6 +87,8 @@ sqlite.exec(`
 // ── Column migrations (safe: ignore error if column already exists) ───────────
 const migrations = [
   `ALTER TABLE conversations ADD COLUMN pending_images_json TEXT`,
+  `ALTER TABLE conversations ADD COLUMN project_name TEXT`,
+  `ALTER TABLE conversations ADD COLUMN project_address TEXT`,
 ];
 for (const sql of migrations) {
   try { sqlite.exec(sql); } catch { /* column already exists — safe to ignore */ }
