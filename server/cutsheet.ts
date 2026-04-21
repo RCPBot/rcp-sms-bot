@@ -255,3 +255,68 @@ export async function emailCutSheet(params: {
     return false;
   }
 }
+
+// ── Email the cut sheet to the customer (with owner CC) ─────────────────────
+// Sent right after plan takeoff completes — before estimate approval.
+// Gives the customer a polished PDF takeoff to review alongside the QBO estimate.
+export async function emailCutSheetToCustomer(params: {
+  pdfPath: string;
+  projectName: string;
+  customerName: string;
+  customerEmail: string;
+  estimateNumber?: string;
+  ownerEmail?: string;
+}): Promise<boolean> {
+  const transporter = getTransporter();
+
+  if (!transporter) {
+    console.warn("[CutSheet] No email transport configured — skipping customer cut sheet email.");
+    return false;
+  }
+
+  if (!params.customerEmail) {
+    console.warn("[CutSheet] No customer email — skipping customer cut sheet email.");
+    return false;
+  }
+
+  try {
+    await transporter.sendMail({
+      from: process.env.EMAIL_USER || "noreply@rebarconcreteproducts.com",
+      to: params.customerEmail,
+      cc: params.ownerEmail || undefined,
+      subject: `Your Rebar Cut Sheet — ${params.projectName}`,
+      text: [
+        `Hi ${params.customerName},`,
+        ``,
+        `Thanks for sending us your plans. Please find your fabrication cut sheet attached.`,
+        params.estimateNumber ? `Estimate #${params.estimateNumber} has also been sent for your review.` : ``,
+        ``,
+        `If anything looks off, reply to this email or call us at 469-631-7730 Mon–Fri 6am–3pm and we'll make it right.`,
+        ``,
+        `Thanks,`,
+        `Rebar Concrete Products`,
+        `2112 N Custer Rd, McKinney, TX 75071`,
+        `469-631-7730`,
+      ].filter(Boolean).join("\n"),
+      html: `
+        <p>Hi ${params.customerName},</p>
+        <p>Thanks for sending us your plans. Please find your <strong>fabrication cut sheet</strong> attached for ${params.projectName}.</p>
+        ${params.estimateNumber ? `<p>Estimate <strong>#${params.estimateNumber}</strong> has also been sent for your review.</p>` : ""}
+        <p>If anything looks off, reply to this email or call us at <strong>469-631-7730</strong> (Mon–Fri 6am–3pm) and we'll make it right.</p>
+        <p style="color:#666;font-size:12px">Rebar Concrete Products | 2112 N Custer Rd, McKinney, TX 75071 | 469-631-7730 | rebarconcreteproducts.com</p>
+      `,
+      attachments: [
+        {
+          filename: `CutSheet_${(params.estimateNumber || "takeoff")}_${params.projectName.replace(/\s+/g, "_")}.pdf`,
+          path: params.pdfPath,
+          contentType: "application/pdf",
+        },
+      ],
+    });
+    console.log(`[CutSheet] Cut sheet emailed to customer ${params.customerEmail}${params.ownerEmail ? ` (cc ${params.ownerEmail})` : ""}`);
+    return true;
+  } catch (err) {
+    console.error("[CutSheet] Customer email failed:", err);
+    return false;
+  }
+}

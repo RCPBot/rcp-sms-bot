@@ -7,7 +7,7 @@ import { processMessage, extractOrderFromConversation, extractCustomerInfo, isAi
 import { syncProducts, findOrCreateCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice, updateRailwayEnvVar, setLiveRefreshToken } from "./qbo";
 import { performTakeoff } from "./takeoff";
 import { resolveLinksFromText, extractUrls } from "./link-resolver";
-import { generateCutSheetPdf, emailCutSheet } from "./cutsheet";
+import { generateCutSheetPdf, emailCutSheet, emailCutSheetToCustomer } from "./cutsheet";
 import type { LineItem } from "@shared/schema";
 import * as fs from "fs";
 import * as path from "path";
@@ -801,6 +801,29 @@ export function registerRoutes(httpServer: Server, app: Express) {
         status: estimateId ? "sent" : "pending",
       });
 
+      // Build + email cut sheet PDF to the customer (with owner CC) right after takeoff.
+      // Fire-and-forget: SMS estimate still goes out even if the email step hiccups.
+      if (takeoffResult.fabItems && takeoffResult.fabItems.length > 0 && conv.customerEmail) {
+        try {
+          const pdfPath = generateCutSheetPdf({
+            projectName: takeoffResult.projectName,
+            customerName: conv.customerName || conv.phone,
+            estimateNumber: estimateNumber || String(savedEstimate.id),
+            fabItems: takeoffResult.fabItems,
+          });
+          await emailCutSheetToCustomer({
+            pdfPath,
+            projectName: takeoffResult.projectName,
+            customerName: conv.customerName || conv.phone,
+            customerEmail: conv.customerEmail,
+            estimateNumber: estimateNumber || undefined,
+            ownerEmail: OWNER_EMAIL,
+          });
+        } catch (pdfErr) {
+          console.error("[Takeoff] Customer cut sheet email failed:", pdfErr);
+        }
+      }
+
       const items = takeoffResult.lineItems;
       // Split into priced items (amount > 0) and unpriced (qty/length TBD)
       const pricedItems = items.filter(i => i.amount > 0);
@@ -826,13 +849,17 @@ export function registerRoutes(httpServer: Server, app: Express) {
       const estimateTotal = subtotal + estimateTax;
       const taxLine = `\nTax (8.25%): $${estimateTax.toFixed(2)}\nEstimated Total: $${estimateTotal.toFixed(2)}`;
 
+      const cutSheetNote = (takeoffResult.fabItems && takeoffResult.fabItems.length > 0 && conv.customerEmail)
+        ? `\n\nYour fabrication cut sheet PDF has been emailed to ${conv.customerEmail}.`
+        : "";
+
       let replyText: string;
       if (estimateLink) {
-        replyText = `Takeoff complete for ${takeoffResult.projectName}!\n\n${top5}${moreCount}${fabNote}${tbdNote}\n\nSubtotal: $${subtotal.toFixed(2)}${taxLine}\n\nView & approve your estimate:\n${estimateLink}\n\nOnce you approve, we\'ll process your fabrication order.`;
+        replyText = `Takeoff complete for ${takeoffResult.projectName}!\n\n${top5}${moreCount}${fabNote}${tbdNote}\n\nSubtotal: $${subtotal.toFixed(2)}${taxLine}${cutSheetNote}\n\nView & approve your estimate:\n${estimateLink}\n\nOnce you approve, we\'ll process your fabrication order.`;
       } else if (estimateNumber) {
-        replyText = `Takeoff complete for ${takeoffResult.projectName}!\n\n${top5}${moreCount}${fabNote}${tbdNote}\n\nSubtotal: $${subtotal.toFixed(2)}${taxLine}\n\nEstimate #${estimateNumber} emailed to ${conv.customerEmail}. Reply APPROVE to confirm.`;
+        replyText = `Takeoff complete for ${takeoffResult.projectName}!\n\n${top5}${moreCount}${fabNote}${tbdNote}\n\nSubtotal: $${subtotal.toFixed(2)}${taxLine}${cutSheetNote}\n\nEstimate #${estimateNumber} emailed to ${conv.customerEmail}. Reply APPROVE to confirm.`;
       } else {
-        replyText = `Takeoff complete for ${takeoffResult.projectName}!\n\n${top5}${moreCount}${fabNote}${tbdNote}\n\nSubtotal: $${subtotal.toFixed(2)}${taxLine}\n\nReply APPROVE to confirm this estimate, or call 469-631-7730 with questions.`;
+        replyText = `Takeoff complete for ${takeoffResult.projectName}!\n\n${top5}${moreCount}${fabNote}${tbdNote}\n\nSubtotal: $${subtotal.toFixed(2)}${taxLine}${cutSheetNote}\n\nReply APPROVE to confirm this estimate, or call 469-631-7730 with questions.`;
       }
 
       storage.addMessage({ conversationId, direction: "outbound", body: replyText });
