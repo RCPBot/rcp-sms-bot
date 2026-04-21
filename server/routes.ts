@@ -357,7 +357,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
         }
         // No files yet — remind customer to send a link
         if (!cleanBody.includes("http") && mediaUrls.length === 0 && pdfUrls.length === 0) {
-          const remind = `Still waiting on your plan set. Please share a Dropbox or Google Drive link and I'll start the takeoff right away. Attaching a PDF file directly over text may not come through.`;
+          const remind = `Still waiting on your plan set. You can text your plan set directly as a PDF attachment, or share a Google Drive or Dropbox direct-download link, and I'll start the takeoff right away.`;
           storage.addMessage({ conversationId: conv.id, direction: "outbound", body: remind });
           await sendSms(cleanPhone, remind);
           return;
@@ -432,6 +432,23 @@ export function registerRoutes(httpServer: Server, app: Express) {
           deliveryAddress: info.deliveryAddress || conv.deliveryAddress,
           stage: "ordering",
         });
+
+        // ── Auto-trigger takeoff if a PDF was attached before verification ──
+        // Customer sent a PDF with their first message — it's been sitting in
+        // pendingImagesJson while we asked for name/phone. Now that they're
+        // verified, kick off the takeoff without making them re-send the file.
+        try {
+          const refreshed = storage.getConversationByPhone(cleanPhone);
+          const pending: string[] = refreshed?.pendingImagesJson
+            ? JSON.parse(refreshed.pendingImagesJson)
+            : [];
+          if (Array.isArray(pending) && pending.some(u => typeof u === "string" && u.startsWith("pdf::"))) {
+            await handlePlanTakeoff(conv.id, cleanPhone, pending, rawPlanUrl);
+            return;
+          }
+        } catch (e: any) {
+          console.warn(`[Takeoff] Failed to check pending PDFs after verify: ${e?.message}`);
+        }
       }
 
       if (intent.type === "confirm_order") {
