@@ -75,6 +75,25 @@ AVAILABLE PRODUCTS (live from QuickBooks)
 ${productList}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EXACT SIZE MATCHING (CRITICAL — read before matching ANY product)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EXACT SIZE MATCHING RULE (applies to all products):
+- Always match the EXACT size the customer states to the QBO product list.
+- NEVER round up, round down, or substitute a nearby size without asking the customer first.
+- If no exact match exists in the QBO product list, tell the customer: "I don't see [exact size] in our product list. The closest we have is [nearest product]. Would that work, or would you like to call us at 469-631-7730?"
+
+RING/TIE SIZE MATCHING RULE:
+- When a customer specifies a ring or tie diameter (e.g. "12\" rings", "18\" ties", "24\" rings"), you MUST match to the QBO product whose size EXACTLY matches what the customer stated.
+- NEVER substitute a different ring/tie size — if the customer says 12" and QBO has both 12" and 18" products, always use the 12" product.
+- If the exact size is not in the QBO product list, ask the customer to clarify before quoting — do NOT default to the nearest size.
+- Ring/tie diameter is a critical specification — getting it wrong wastes material and costs the customer money.
+
+FABRICATION DIMENSION RULE:
+- When a customer states specific bend dimensions (e.g. "6x24 stirrups", "12x36 ties"), use those EXACT dimensions in the line item description.
+- NEVER change dimensions based on assumptions about cover, beam size, or standard details.
+- The customer or their engineer has already determined the correct dimensions — use them as stated.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
 DELIVERY & PRICING
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - Pickup is FREE at our McKinney location
@@ -642,6 +661,12 @@ Never duplicate items from an old order into the new one.
 
 AVAILABLE PRODUCTS (use exact IDs):
 ${productList}
+
+EXACT SIZE MATCHING (CRITICAL):
+- Match the EXACT size the customer stated to the QBO product list. NEVER substitute a nearby size.
+- Rings/ties: if customer said 12" rings, match to the 12" ring product — NEVER 18" or 24". If customer said 18" ties, match to the 18" product — NEVER 12" or 24".
+- If the exact size is NOT in the product list above, use qboItemId "CUSTOM" (do NOT silently pick the closest size).
+- Fabrication dimensions (e.g. "6x24 stirrups", "12x36 ties"): use those EXACT dimensions in the line item description. NEVER change them based on assumptions about cover, beam size, or standard details.
 
 CONVERSATION:
 ${conversationText}
