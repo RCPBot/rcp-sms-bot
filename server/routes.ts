@@ -225,6 +225,33 @@ export function registerRoutes(httpServer: Server, app: Express) {
         body: bodyWithMedia,
       });
 
+      // ── Early trigger: verified customer sent a PDF → run takeoff NOW ────────
+      // This must fire before any other handler so the PDF message isn't also
+      // processed as an order/AI intent. Covers stages "ordering", "invoiced",
+      // and any non-plan-processing stage.
+      if (
+        pdfUrls.length > 0 &&
+        conv.verified &&
+        conv.stage !== "plan_processing" &&
+        conv.stage !== "takeoff_pending" &&
+        conv.stage !== "estimating" &&
+        conv.stage !== "invoice_review"
+      ) {
+        conv = storage.updateConversation(conv.id, { stage: "plan_processing" });
+        const takeoffImages = [
+          ...mediaUrls,
+          ...pdfUrls.map(u => `pdf::${u}`),
+        ];
+        const rawPlanUrlEarly = (() => {
+          const urls = extractUrls(cleanBody);
+          return urls.length > 0 ? urls[0] : undefined;
+        })();
+        handlePlanTakeoff(conv.id, cleanPhone, takeoffImages, rawPlanUrlEarly).catch(err => {
+          console.error("[Takeoff] Early trigger failed:", err);
+        });
+        return;
+      }
+
       // ── Shortcut: END / DONE — customer explicitly closes the conversation ───
       const CLOSE_KEYWORDS = /^(done|bye|goodbye|end|close|that'?s? all|no more|nothing else|we'?re? good|all good|thank you that'?s? all|thanks that'?s? all|that will (be )?all)[\.!]?$/i;
       if (CLOSE_KEYWORDS.test(cleanBody.trim())) {
