@@ -800,12 +800,84 @@ function buildFromCutSheet(consolidated: any, products: Product[]): TakeoffResul
 
 // ════════════════════════════════════════════════════════════════════════════
 // ── Claude multi-pass takeoff ────────────────────────────────────────────────
-// Anthropic's SDK accepts PDFs natively as document content blocks (base64).
+// Structural shop drawings render bar-list / bend-schedule tables as vector
+// graphics — there is no text layer. We rasterize each PDF page to PNG with
+// pdftoppm (poppler-utils) and send the images to Claude as image blocks.
 // Pass 1: raw bar-mark extraction per chunk.
 // Pass 2: validation pass on same chunk to catch anything missed.
 // Pass 3: consolidation (merge chunks, dedupe, classify fab vs stock).
 // Weights are ALWAYS computed in TS (never trusted from the model).
 // ════════════════════════════════════════════════════════════════════════════
+
+// Rasterize a PDF (bytes) to an array of PNG buffers using pdftoppm.
+// Railway/nixpacks already installs poppler-utils. Falls back to empty array
+// if pdftoppm fails so caller can fall back to document-block mode.
+async function renderPdfToPngs(pdfBytes: Uint8Array, dpi = 200, maxPages = 20): Promise<Buffer[]> {
+  const { execFileSync } = await import("child_process");
+  const fs = await import("fs");
+  const os = await import("os");
+  const path = await import("path");
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rcp-plan-"));
+  const pdfPath = path.join(dir, "plan.pdf");
+  const outPrefix = path.join(dir, "page");
+  fs.writeFileSync(pdfPath, Buffer.from(pdfBytes));
+
+  try {
+    execFileSync("pdftoppm", [
+      "-r", String(dpi),
+      "-png",
+      "-l", String(maxPages),
+      pdfPath,
+      outPrefix,
+    ], { stdio: ["ignore", "ignore", "pipe"] });
+  } catch (err: any) {
+    console.warn(`[Takeoff/Claude] pdftoppm failed: ${err?.message || err}`);
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+    return [];
+  }
+
+  const files = fs.readdirSync(dir)
+    .filter(f => f.startsWith("page") && f.endsWith(".png"))
+    .sort();
+  const buffers: Buffer[] = [];
+  for (const f of files) {
+    try { buffers.push(fs.readFileSync(path.join(dir, f))); } catch {}
+  }
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+  console.log(`[Takeoff/Claude] Rendered ${buffers.length} page(s) to PNG @${dpi}dpi`);
+  return buffers;
+}
+
+// Build image content blocks for the Anthropic messages API from PNG buffers.
+function buildImageBlocks(pngBuffers: Buffer[]): any[] {
+  return pngBuffers.map(buf => ({
+    type: "image",
+    source: { type: "base64", media_type: "image/png", data: buf.toString("base64") },
+  }));
+}
+
+// Validate an extracted bars[] array. Returns total weight in lbs and flags.
+function validateExtractedBars(bars: any[]): { totalWeightLb: number; ok: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+  if (!Array.isArray(bars) || bars.length === 0) {
+    return { totalWeightLb: 0, ok: false, reasons: ["no bars extracted"] };
+  }
+  let totalWeightLb = 0;
+  for (const b of bars) {
+    const sz = normBar(b.size || b.barSize || "");
+    const qty = parseInt(b.qty) || 0;
+    const cut = parseFloat(b.cutLengthFt) || 0;
+    const n = parseInt(sz.replace("#", ""));
+    if (!Number.isFinite(n) || n < 3 || n > 11) reasons.push(`bad size ${sz}`);
+    if (cut < 1.0 || cut > 40.0) reasons.push(`bad cutLen ${cut} for ${sz}`);
+    if (qty <= 0) reasons.push(`bad qty ${qty} for ${sz}`);
+    const wPerFt = BAR_WEIGHT[sz] ?? 0;
+    totalWeightLb += qty * cut * wPerFt;
+  }
+  const ok = totalWeightLb >= 500 && reasons.length === 0;
+  return { totalWeightLb, ok, reasons };
+}
 
 async function claudeWithRetry(
   anthropic: Anthropic,
@@ -875,74 +947,94 @@ function safeJsonParse(s: string): any {
   }
 }
 
-// Pass 1 prompt for Claude — same core expectations as GPT PASS1_PROMPT
-// but slightly trimmed and framed for Claude's strengths.
-const CLAUDE_PASS1_PROMPT = `You are a licensed structural rebar detailer producing a CUT SHEET from construction plan pages.
+// Pass 1 prompt for Claude — targets structural shop-drawing bar lists.
+// These PDFs render the bar list / bend schedule tables as vector graphics
+// (no text layer), so we send the pages as images and instruct Claude to
+// read visually.
+const CLAUDE_PASS1_PROMPT = `You are analyzing a structural reinforcing steel shop drawing (placement plan) from a rebar fabricator (e.g. Ready Cable, Commercial Metals). The bar list and bend schedule tables in these drawings are rendered as vector graphics — READ THEM VISUALLY from the image, they are not extractable as text.
 
-Analyze this PDF carefully. Extract EVERY rebar item you can see, including:
-1. Formal bar schedule tables (Mark, Size, Length, Qty, Bend columns)
-2. Rebar callouts in plan view (e.g. "#4 @ 12\\" E.W.", "2-#5 CONT.")
-3. Section / detail callouts
-4. Stirrup / tie schedules
-5. Pier verticals, ties, dowels, corner bars
+Your job is to extract the complete BAR LIST from this drawing.
 
-For each bar group, classify as FABRICATED (any bend/hook/stirrup/loop/L-shape/hairpin) or STOCK (straight cut only).
+Look for a table (usually in the lower right area of page 2) with columns like:
+  REQ | QTY | SIZE | LENGTH | MARK | NOTE
+or similar columns for bar schedule data.
 
-QUANTITY RULES (do the math, show it in "math" field):
-• DRILLED PIER VERTICALS (fab): qty = bars_per_pier × pier_count; cutLen = pier_depth + 2ft stub
-• DRILLED PIER TIES (fab): qty = ceil(pier_depth_ft / spacing_ft) × pier_count; cutLen = π × cage_OD + 1ft
-• GRADE-BEAM CONTINUOUS (stock): totalLF = bars_per_beam × beam_LF × 1.10; qty = ceil(totalLF/20) sticks
-• GRADE-BEAM STIRRUPS (fab): qty = ceil(beam_LF/spacing_ft) + 1; cutLen = 2×(w+h)/12 + 1ft hooks
-• CORNER BARS (fab): qty = intersection_count × bars/intersection; cutLen = legA + legB
-• SLAB MAT (stock): totalLF = 2 × floor_SF × (1+lap%); qty = ceil(totalLF/20); cutLen=20
-• NEVER output qty=0 or cutLengthFt=0. Estimate conservatively if unclear.
+Also look for:
+- A BEND SCHEDULE showing bar mark numbers with bend dimensions (501, 601, 701, 201, 401, 504, etc.)
+- Section details with rebar callouts (e.g. "SHORT BEAMS: (3) #5 T&B, #3 STIRRUPS @ 18\\" OC")
+- Any table showing rebar quantities, sizes, and lengths
+- Section labels like FOUNDATION, SHORT BEAMS, LONG BEAMS, SUMPOUT, COLUMNS, PILASTER
 
-OTHER MATERIALS:
-• Poly/vapor barrier: include mil + roll size (e.g. "6 mil poly 32x100"), qty in SF
-• Foundation plans use DOBIE BRICKS: 1 per 4 LF of beam
-• Anchor bolts: 1/2" × 10" @ 6'-0" O.C. along perimeter unless stated otherwise
-• Do NOT list PT strands as rebar
+For EACH bar entry, emit ONE object in the bars[] array with:
+- mark: the mark number/letter shown in the MARK column (e.g. "501", "601", "701", "A", "S1"). Use "STR" for straight bars with no mark.
+- isFabricated: BOOLEAN. true if the bar has any bend/hook/stirrup/tie/loop shown in the bend schedule; false if it is a straight cut.
+- bendType: "straight" if no mark/bend, "stirrup" for U-shaped or closed tie, "L-hook" if one end bent, "90-hook", "180-hook", "U-tie", "hooked", or "custom" for other bends.
+- size: bar size as "#3", "#4", "#5", "#6", "#7", "#8", etc. (always prefixed with #)
+- qty: the QTY or REQ count (integer). If a section note says "×4 LOCATIONS" or "4 PLACES", multiply the per-location qty by that number and put the multiplied total here.
+- cutLengthFt: cut length in DECIMAL feet. Convert feet-inches exactly:
+    "20'-0\\"" → 20.0
+    "8'-2\\""  → 8.167
+    "4'-0\\""  → 4.0
+    "3'-6\\""  → 3.5
+    "6'-0\\""  → 6.0
+- legDims: (optional) for bent bars, inside leg dimensions in inches, e.g. ["11","40"] for an 11x40 stirrup (13" beam minus 2" cover = 11" inside; 42" beam minus 2" = 40").
+- location: the NOTE column value or section label verbatim, e.g. "Foundation 14\\" OCEW", "Short beam 3 CONT T&B", "Long beam stirrup 18\\" OC", "Sumpout U-tie", "Column 501", "Pilaster hooked".
+
+IMPORTANT:
+- Return EVERY row of the bar list as a separate object. Do NOT collapse multiple rows.
+- Convert ALL lengths to decimal feet.
+- For stirrups/ties inside dimensions: subtract 2" from beam width and height for cover.
+- Multiply by repetition factors ("×4 LOCATIONS", "4 PLACES") when present.
+- Straight bars (no mark, no bend) → isFabricated: false. Everything else (stirrups, U-ties, L-hooks, bent bars with mark numbers like 501/601/701/201/401/504/500) → isFabricated: true.
+- Bar sizes are integers 3 through 11 only.
+- NEVER output qty=0 or cutLengthFt=0. If you cannot read a row clearly, estimate conservatively from context.
+- Do NOT list post-tension strands as rebar.
 
 Return ONLY valid JSON — no prose, no markdown fences:
 {
   "projectName": "from title block, or null",
-  "notes": ["sheet type", "pier count", "beam LF"],
+  "notes": ["sheet type", "drawing number", "section list"],
   "bars": [
     {
-      "mark": "PIER-VERT",
+      "mark": "501",
       "isFabricated": true,
-      "bendType": "T2",
+      "bendType": "stirrup",
+      "size": "#3",
+      "qty": 794,
+      "cutLengthFt": 8.167,
+      "legDims": ["11","40"],
+      "location": "Short beam stirrup @ 18\\" OC"
+    },
+    {
+      "mark": "STR",
+      "isFabricated": false,
+      "bendType": "straight",
       "size": "#5",
-      "qty": 180,
-      "cutLengthFt": 18.0,
-      "legDims": ["16'","2'"],
-      "location": "pier verticals",
-      "math": "3 bars/pier × 60 piers = 180"
+      "qty": 420,
+      "cutLengthFt": 20.0,
+      "location": "Short beam 3 CONT T&B"
     }
   ],
-  "otherMaterials": [
-    {"name":"6 mil poly 32x100","qty":6161,"unit":"SF"},
-    {"name":"dobie brick","qty":282,"unit":"EA"}
-  ]
+  "otherMaterials": []
 }
 
 Every bar MUST have isFabricated as boolean (true/false), never null.`;
 
-const CLAUDE_PASS2_VALIDATION_PROMPT = (pass1Json: string) => `I previously extracted this rebar schedule from this construction plan PDF:
+const CLAUDE_PASS2_VALIDATION_PROMPT = (pass1Json: string) => `I previously extracted this rebar schedule from the same shop drawing pages you are looking at now:
 
 ${pass1Json}
 
-Review the plan again carefully. Are there any rebar items I MISSED? Look specifically for:
-- Rebar in sections / details not in the main schedule
-- Dowels, ties, or special bars noted in callouts
-- Stirrups or corner bars on detail sheets
-- Any quantity or size that looks wrong compared to what you see
+Look at the page images again carefully (the BAR LIST and BEND SCHEDULE tables are drawn as graphics — read them visually). Are there any rebar rows I MISSED? Look specifically for:
+- Rows in the BAR LIST table I did not capture
+- Bar marks in the BEND SCHEDULE that are not represented in my list
+- Section callouts (e.g. "×4 LOCATIONS") where quantities should be multiplied
+- Any quantity, size, or cut length that looks wrong compared to the drawing
 
-Return ONLY the ADDITIONAL items that were missed as JSON (same schema as before):
+Return ONLY the ADDITIONAL items that were missed as JSON (same schema as before — use the bars[] format with mark/isFabricated/bendType/size/qty/cutLengthFt/location):
 {
   "bars": [ /* only missed items, or [] if nothing missed */ ],
   "otherMaterials": [ /* only missed materials, or [] */ ],
-  "corrections": [ /* optional plain-text notes about wrong qty/size, or [] */ ]
+  "corrections": [ /* plain-text notes about wrong qty/size/length, or [] */ ]
 }
 
 If nothing was missed, return: {"bars":[],"otherMaterials":[],"corrections":[]}`;
@@ -1023,25 +1115,40 @@ Return ONLY valid JSON:
 Use exactly these keys: fabricatedBars, stockBars, otherMaterials. Do NOT return weightLb or fabTotalWeightLb — weights are computed downstream.`;
 }
 
+// Build the visual content blocks for a chunk. Prefers PNG page images
+// (rendered via pdftoppm) so Claude can READ the bar-list/bend-schedule
+// tables, which are drawn as vector graphics with no text layer. Falls
+// back to a PDF document block if rasterization fails.
+async function buildChunkVisualBlocks(chunkBytes: Uint8Array, label: string): Promise<any[]> {
+  const pngs = await renderPdfToPngs(chunkBytes, 200, 20);
+  if (pngs.length > 0) {
+    console.log(`[Takeoff/Claude] ${label}: using ${pngs.length} PNG image block(s)`);
+    return buildImageBlocks(pngs);
+  }
+  console.warn(`[Takeoff/Claude] ${label}: PNG render failed, falling back to PDF document block`);
+  const b64 = Buffer.from(chunkBytes).toString("base64");
+  return [{
+    type: "document",
+    source: { type: "base64", media_type: "application/pdf", data: b64 },
+  }];
+}
+
 async function runClaudePass1(
   anthropic: Anthropic,
   chunkBytes: Uint8Array,
   chunkIndex: number,
   totalChunks: number
 ): Promise<any> {
-  const b64 = Buffer.from(chunkBytes).toString("base64");
   const label = `pass1 chunk ${chunkIndex + 1}/${totalChunks}`;
+  const visualBlocks = await buildChunkVisualBlocks(chunkBytes, label);
 
   const rawText = await claudeWithRetry(
     anthropic,
     [{
       role: "user",
       content: [
-        {
-          type: "document",
-          source: { type: "base64", media_type: "application/pdf", data: b64 },
-        },
-        { type: "text", text: `This is chunk ${chunkIndex + 1} of ${totalChunks} from a construction plan set.\n\n${CLAUDE_PASS1_PROMPT}` },
+        ...visualBlocks,
+        { type: "text", text: `This is chunk ${chunkIndex + 1} of ${totalChunks} from a structural shop drawing. Read the bar list and bend schedule tables VISUALLY from the images above.\n\n${CLAUDE_PASS1_PROMPT}` },
       ],
     }],
     8000,
@@ -1058,19 +1165,16 @@ async function runClaudePass2(
   totalChunks: number,
   pass1: any
 ): Promise<any> {
-  const b64 = Buffer.from(chunkBytes).toString("base64");
   const label = `pass2 chunk ${chunkIndex + 1}/${totalChunks}`;
   const pass1Json = JSON.stringify(pass1 || {}, null, 2).slice(0, 20000);
+  const visualBlocks = await buildChunkVisualBlocks(chunkBytes, label);
 
   const rawText = await claudeWithRetry(
     anthropic,
     [{
       role: "user",
       content: [
-        {
-          type: "document",
-          source: { type: "base64", media_type: "application/pdf", data: b64 },
-        },
+        ...visualBlocks,
         { type: "text", text: CLAUDE_PASS2_VALIDATION_PROMPT(pass1Json) },
       ],
     }],
@@ -1141,6 +1245,7 @@ async function performClaudeTakeoff(
   console.log(`[Takeoff/Claude] ${readyChunks.length} chunk(s) ready — starting multi-pass extraction`);
 
   const chunkRaws: any[] = [];
+  const allBarsForValidation: any[] = [];
   for (let i = 0; i < readyChunks.length; i++) {
     const pass1 = await runClaudePass1(anthropic, readyChunks[i], i, readyChunks.length);
     const hasBars = Array.isArray(pass1?.bars) && pass1.bars.length > 0;
@@ -1155,6 +1260,16 @@ async function performClaudeTakeoff(
       }
     }
     chunkRaws.push(merged);
+    if (Array.isArray(merged?.bars)) allBarsForValidation.push(...merged.bars);
+  }
+
+  // Validate extracted bars before consolidating. A 2-page structural shop
+  // drawing should produce substantial tonnage — if we're under the floor,
+  // Claude didn't read the bar list and we should let GPT-4o try.
+  const v = validateExtractedBars(allBarsForValidation);
+  console.log(`[Takeoff/Claude] validation: ${allBarsForValidation.length} bars, ~${Math.round(v.totalWeightLb)} lb total; reasons=${v.reasons.slice(0, 3).join("; ") || "ok"}`);
+  if (v.totalWeightLb < 500) {
+    throw new Error(`Claude extraction below weight floor (~${Math.round(v.totalWeightLb)} lb < 500 lb); triggering GPT-4o fallback`);
   }
 
   const consolidated = await runClaudeConsolidation(anthropic, chunkRaws);
