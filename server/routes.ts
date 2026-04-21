@@ -7,7 +7,7 @@ import { processMessage, extractOrderFromConversation, extractCustomerInfo, isAi
 import { syncProducts, findOrCreateCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice, updateRailwayEnvVar, setLiveRefreshToken } from "./qbo";
 import { performTakeoff } from "./takeoff";
 import { resolveLinksFromText, extractUrls } from "./link-resolver";
-import { generateCutSheetPdf, emailCutSheet, emailCutSheetToCustomer } from "./cutsheet";
+import { generateCutSheetPdf, emailCutSheet, emailCutSheetToCustomer, generatePlacementDrawingPdf } from "./cutsheet";
 import type { LineItem } from "@shared/schema";
 import * as fs from "fs";
 import * as path from "path";
@@ -818,8 +818,8 @@ export function registerRoutes(httpServer: Server, app: Express) {
         status: estimateId ? "sent" : "pending",
       });
 
-      // Build + email cut sheet PDF to the customer (with owner CC) right after takeoff.
-      // Fire-and-forget: SMS estimate still goes out even if the email step hiccups.
+      // Build + email cut sheet + placement drawing PDFs to the customer (with owner CC)
+      // right after takeoff. Fire-and-forget: SMS estimate still goes out even if email fails.
       if (takeoffResult.fabItems && takeoffResult.fabItems.length > 0 && conv.customerEmail) {
         try {
           const pdfPath = generateCutSheetPdf({
@@ -828,8 +828,20 @@ export function registerRoutes(httpServer: Server, app: Express) {
             estimateNumber: estimateNumber || String(savedEstimate.id),
             fabItems: takeoffResult.fabItems,
           });
+          let placementPdfPath: string | undefined;
+          try {
+            placementPdfPath = await generatePlacementDrawingPdf({
+              projectName: takeoffResult.projectName,
+              customerName: conv.customerName || conv.phone,
+              estimateNumber: estimateNumber || String(savedEstimate.id),
+              fabItems: takeoffResult.fabItems,
+            });
+          } catch (placementErr) {
+            console.error("[Takeoff] Placement drawing generation failed:", placementErr);
+          }
           await emailCutSheetToCustomer({
             pdfPath,
+            placementPdfPath,
             projectName: takeoffResult.projectName,
             customerName: conv.customerName || conv.phone,
             customerEmail: conv.customerEmail,
@@ -867,7 +879,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
       const taxLine = `\nTax (8.25%): $${estimateTax.toFixed(2)}\nEstimated Total: $${estimateTotal.toFixed(2)}`;
 
       const cutSheetNote = (takeoffResult.fabItems && takeoffResult.fabItems.length > 0 && conv.customerEmail)
-        ? `\n\nYour fabrication cut sheet PDF has been emailed to ${conv.customerEmail}.`
+        ? `\n\nYour cut sheet and placement drawing have been sent to ${conv.customerEmail}. Creating your estimate now...`
         : "";
 
       let replyText: string;

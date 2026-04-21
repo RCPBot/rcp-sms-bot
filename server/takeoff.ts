@@ -13,6 +13,7 @@
  * Image inputs fall back to Chat Completions API with image_url content parts.
  */
 import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
 import type { Product, LineItem, FabItem } from "@shared/schema";
 
 let _client: OpenAI | null = null;
@@ -20,6 +21,15 @@ function getClient(): OpenAI {
   if (!_client) _client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   return _client;
 }
+
+let _anthropic: Anthropic | null = null;
+function getAnthropic(): Anthropic {
+  if (!_anthropic) _anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  return _anthropic;
+}
+
+const CLAUDE_MODEL = process.env.CLAUDE_MODEL || "claude-opus-4-5";
+const CLAUDE_FALLBACK_MODEL = "claude-3-5-sonnet-20241022";
 
 const FABRICATION_QBO_ID = "1010000301";
 
@@ -788,6 +798,371 @@ function buildFromCutSheet(consolidated: any, products: Product[]): TakeoffResul
     return { lineItems, fabItems, takeoffNotes, projectName };
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// ── Claude multi-pass takeoff ────────────────────────────────────────────────
+// Anthropic's SDK accepts PDFs natively as document content blocks (base64).
+// Pass 1: raw bar-mark extraction per chunk.
+// Pass 2: validation pass on same chunk to catch anything missed.
+// Pass 3: consolidation (merge chunks, dedupe, classify fab vs stock).
+// Weights are ALWAYS computed in TS (never trusted from the model).
+// ════════════════════════════════════════════════════════════════════════════
+
+async function claudeWithRetry(
+  anthropic: Anthropic,
+  messages: any[],
+  maxTokens: number,
+  label: string
+): Promise<string> {
+  let attempts = 0;
+  while (attempts < 4) {
+    try {
+      const models = [CLAUDE_MODEL, CLAUDE_FALLBACK_MODEL];
+      const model = models[Math.min(attempts, models.length - 1)];
+      const resp = await anthropic.messages.create({
+        model,
+        max_tokens: maxTokens,
+        messages,
+      });
+      const parts = (resp.content || []) as any[];
+      let text = "";
+      for (const p of parts) {
+        if (p.type === "text" && typeof p.text === "string") text += p.text;
+      }
+      return text;
+    } catch (err: any) {
+      const status = err?.status ?? err?.response?.status;
+      if (status === 429 || status === 529) {
+        const wait = 20_000 + attempts * 15_000;
+        console.log(`[Takeoff/Claude] ${label} rate/overload (${status}), waiting ${wait}ms...`);
+        await new Promise(r => setTimeout(r, wait));
+        attempts++;
+        continue;
+      }
+      if (status === 404 || status === 400) {
+        // model mismatch — bump attempt to try fallback model
+        console.log(`[Takeoff/Claude] ${label} got ${status} — trying fallback model`);
+        attempts++;
+        continue;
+      }
+      throw err;
+    }
+  }
+  return "";
+}
+
+function stripJsonFences(s: string): string {
+  return s
+    .replace(/^\s*```(?:json)?\s*/i, "")
+    .replace(/\s*```\s*$/i, "")
+    .trim();
+}
+
+function safeJsonParse(s: string): any {
+  if (!s) return {};
+  const cleaned = stripJsonFences(s);
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    // Try to extract the first balanced JSON object/array
+    const objStart = cleaned.indexOf("{");
+    const arrStart = cleaned.indexOf("[");
+    const start = objStart < 0 ? arrStart : arrStart < 0 ? objStart : Math.min(objStart, arrStart);
+    const end = Math.max(cleaned.lastIndexOf("}"), cleaned.lastIndexOf("]"));
+    if (start >= 0 && end > start) {
+      try { return JSON.parse(cleaned.slice(start, end + 1)); } catch {}
+    }
+    return {};
+  }
+}
+
+// Pass 1 prompt for Claude — same core expectations as GPT PASS1_PROMPT
+// but slightly trimmed and framed for Claude's strengths.
+const CLAUDE_PASS1_PROMPT = `You are a licensed structural rebar detailer producing a CUT SHEET from construction plan pages.
+
+Analyze this PDF carefully. Extract EVERY rebar item you can see, including:
+1. Formal bar schedule tables (Mark, Size, Length, Qty, Bend columns)
+2. Rebar callouts in plan view (e.g. "#4 @ 12\\" E.W.", "2-#5 CONT.")
+3. Section / detail callouts
+4. Stirrup / tie schedules
+5. Pier verticals, ties, dowels, corner bars
+
+For each bar group, classify as FABRICATED (any bend/hook/stirrup/loop/L-shape/hairpin) or STOCK (straight cut only).
+
+QUANTITY RULES (do the math, show it in "math" field):
+• DRILLED PIER VERTICALS (fab): qty = bars_per_pier × pier_count; cutLen = pier_depth + 2ft stub
+• DRILLED PIER TIES (fab): qty = ceil(pier_depth_ft / spacing_ft) × pier_count; cutLen = π × cage_OD + 1ft
+• GRADE-BEAM CONTINUOUS (stock): totalLF = bars_per_beam × beam_LF × 1.10; qty = ceil(totalLF/20) sticks
+• GRADE-BEAM STIRRUPS (fab): qty = ceil(beam_LF/spacing_ft) + 1; cutLen = 2×(w+h)/12 + 1ft hooks
+• CORNER BARS (fab): qty = intersection_count × bars/intersection; cutLen = legA + legB
+• SLAB MAT (stock): totalLF = 2 × floor_SF × (1+lap%); qty = ceil(totalLF/20); cutLen=20
+• NEVER output qty=0 or cutLengthFt=0. Estimate conservatively if unclear.
+
+OTHER MATERIALS:
+• Poly/vapor barrier: include mil + roll size (e.g. "6 mil poly 32x100"), qty in SF
+• Foundation plans use DOBIE BRICKS: 1 per 4 LF of beam
+• Anchor bolts: 1/2" × 10" @ 6'-0" O.C. along perimeter unless stated otherwise
+• Do NOT list PT strands as rebar
+
+Return ONLY valid JSON — no prose, no markdown fences:
+{
+  "projectName": "from title block, or null",
+  "notes": ["sheet type", "pier count", "beam LF"],
+  "bars": [
+    {
+      "mark": "PIER-VERT",
+      "isFabricated": true,
+      "bendType": "T2",
+      "size": "#5",
+      "qty": 180,
+      "cutLengthFt": 18.0,
+      "legDims": ["16'","2'"],
+      "location": "pier verticals",
+      "math": "3 bars/pier × 60 piers = 180"
+    }
+  ],
+  "otherMaterials": [
+    {"name":"6 mil poly 32x100","qty":6161,"unit":"SF"},
+    {"name":"dobie brick","qty":282,"unit":"EA"}
+  ]
+}
+
+Every bar MUST have isFabricated as boolean (true/false), never null.`;
+
+const CLAUDE_PASS2_VALIDATION_PROMPT = (pass1Json: string) => `I previously extracted this rebar schedule from this construction plan PDF:
+
+${pass1Json}
+
+Review the plan again carefully. Are there any rebar items I MISSED? Look specifically for:
+- Rebar in sections / details not in the main schedule
+- Dowels, ties, or special bars noted in callouts
+- Stirrups or corner bars on detail sheets
+- Any quantity or size that looks wrong compared to what you see
+
+Return ONLY the ADDITIONAL items that were missed as JSON (same schema as before):
+{
+  "bars": [ /* only missed items, or [] if nothing missed */ ],
+  "otherMaterials": [ /* only missed materials, or [] */ ],
+  "corrections": [ /* optional plain-text notes about wrong qty/size, or [] */ ]
+}
+
+If nothing was missed, return: {"bars":[],"otherMaterials":[],"corrections":[]}`;
+
+function mergeChunkExtractions(pass1: any, pass2: any): any {
+  const bars: any[] = Array.isArray(pass1?.bars) ? [...pass1.bars] : [];
+  const seenMarks = new Set(bars.map(b => (b.mark || "").toString().toLowerCase()));
+  for (const extra of (pass2?.bars || [])) {
+    const key = (extra.mark || "").toString().toLowerCase();
+    if (!key || !seenMarks.has(key)) {
+      bars.push(extra);
+      if (key) seenMarks.add(key);
+    }
+  }
+
+  const other: any[] = Array.isArray(pass1?.otherMaterials) ? [...pass1.otherMaterials] : [];
+  const seenOther = new Set(other.map(m => `${(m.name || "").toLowerCase()}|${m.unit || ""}`));
+  for (const extra of (pass2?.otherMaterials || [])) {
+    const key = `${(extra.name || "").toLowerCase()}|${extra.unit || ""}`;
+    if (!seenOther.has(key)) {
+      other.push(extra);
+      seenOther.add(key);
+    }
+  }
+
+  const notes: string[] = [...(pass1?.notes || [])];
+  if (Array.isArray(pass2?.corrections)) {
+    for (const c of pass2.corrections) {
+      if (typeof c === "string" && c.trim()) notes.push(`validation: ${c.trim()}`);
+    }
+  }
+
+  return {
+    projectName: pass1?.projectName || null,
+    notes,
+    bars,
+    otherMaterials: other,
+  };
+}
+
+// Consolidation prompt for Claude — same structure as GPT Pass 2 but text-only.
+function buildClaudeConsolidationPrompt(chunkDataJson: string): string {
+  return `You are a structural rebar estimator consolidating raw takeoff data from ${JSON.parse(chunkDataJson).length} section(s) of a plan set.
+
+Your job is to produce the FINAL cut sheet in the format a professional detailer uses:
+• One rolled-up total weight for ALL fabricated bars (goes to Fabrication-1 line @ $0.75/lb)
+• Separate stock-bar line items per (size, stock-length) group
+• Other materials grouped by type
+
+CONSOLIDATION RULES:
+1. DEDUPE bar marks across chunks. If the same mark appears in multiple chunks with matching size+location,
+   treat them as ONE (pick the most detailed chunk; do NOT sum).
+2. SUM quantities only when a mark legitimately spans different sections (e.g. two separate detail sheets).
+3. CLASSIFY using isFabricated from Pass 1. If unset, infer: any bar with bend/hook/stirrup/tie/loop/ring/spiral/L-bar/corner/hairpin/"Type N" is fabricated.
+4. STOCK BAR GROUPING: group by (size, stock_length). Use 20' unless any cut length exceeds 19' → then 40'.
+   stickCount = ceil(totalLinearFt / stock_length). Round UP.
+5. Use projectName from the first chunk that provides one.
+
+Raw chunk data:
+${chunkDataJson}
+
+Return ONLY valid JSON:
+{
+  "projectName": "name or null",
+  "notes": ["observations"],
+  "fabricatedBars": [
+    {"mark":"PIER-VERT","size":"#5","qty":180,"cutLengthFt":18.0,"bendType":"T2","legDims":["16'","2'"],"location":"pier verticals"}
+  ],
+  "stockBars": [
+    {"size":"#5","stockLengthFt":20,"cutLengthFt":20,"totalLinearFt":2479,"stickCount":124,"location":"grade beam cont."}
+  ],
+  "otherMaterials": [
+    {"name":"6 mil poly 32x100","qty":6161,"unit":"SF"},
+    {"name":"dobie brick","qty":282,"unit":"EA"}
+  ]
+}
+
+Use exactly these keys: fabricatedBars, stockBars, otherMaterials. Do NOT return weightLb or fabTotalWeightLb — weights are computed downstream.`;
+}
+
+async function runClaudePass1(
+  anthropic: Anthropic,
+  chunkBytes: Uint8Array,
+  chunkIndex: number,
+  totalChunks: number
+): Promise<any> {
+  const b64 = Buffer.from(chunkBytes).toString("base64");
+  const label = `pass1 chunk ${chunkIndex + 1}/${totalChunks}`;
+
+  const rawText = await claudeWithRetry(
+    anthropic,
+    [{
+      role: "user",
+      content: [
+        {
+          type: "document",
+          source: { type: "base64", media_type: "application/pdf", data: b64 },
+        },
+        { type: "text", text: `This is chunk ${chunkIndex + 1} of ${totalChunks} from a construction plan set.\n\n${CLAUDE_PASS1_PROMPT}` },
+      ],
+    }],
+    8000,
+    label
+  );
+  console.log(`[Takeoff/Claude] ${label} response: ${rawText.length} chars`);
+  return safeJsonParse(rawText);
+}
+
+async function runClaudePass2(
+  anthropic: Anthropic,
+  chunkBytes: Uint8Array,
+  chunkIndex: number,
+  totalChunks: number,
+  pass1: any
+): Promise<any> {
+  const b64 = Buffer.from(chunkBytes).toString("base64");
+  const label = `pass2 chunk ${chunkIndex + 1}/${totalChunks}`;
+  const pass1Json = JSON.stringify(pass1 || {}, null, 2).slice(0, 20000);
+
+  const rawText = await claudeWithRetry(
+    anthropic,
+    [{
+      role: "user",
+      content: [
+        {
+          type: "document",
+          source: { type: "base64", media_type: "application/pdf", data: b64 },
+        },
+        { type: "text", text: CLAUDE_PASS2_VALIDATION_PROMPT(pass1Json) },
+      ],
+    }],
+    3000,
+    label
+  );
+  console.log(`[Takeoff/Claude] ${label} response: ${rawText.length} chars`);
+  return safeJsonParse(rawText);
+}
+
+async function runClaudeConsolidation(anthropic: Anthropic, chunkRaws: any[]): Promise<any> {
+  const chunkDataJson = JSON.stringify(chunkRaws, null, 2).slice(0, 80000);
+  const prompt = buildClaudeConsolidationPrompt(chunkDataJson);
+  console.log(`[Takeoff/Claude] Pass 3 (consolidation): ${chunkRaws.length} chunk(s)`);
+  const rawText = await claudeWithRetry(
+    anthropic,
+    [{ role: "user", content: [{ type: "text", text: prompt }] }],
+    6000,
+    "consolidation"
+  );
+  return safeJsonParse(rawText);
+}
+
+async function performClaudeTakeoff(
+  pdfUrls: string[],
+  products: Product[]
+): Promise<TakeoffResult> {
+  const MAX_CHUNK_BYTES = 28 * 1024 * 1024; // Claude's 32MB document cap, leave headroom for base64 overhead
+  const anthropic = getAnthropic();
+  const { PDFDocument } = await import("pdf-lib");
+
+  const readyChunks: Uint8Array[] = [];
+  for (const pdfUrl of pdfUrls) {
+    console.log(`[Takeoff/Claude] Downloading PDF: ${pdfUrl.substring(0, 80)}...`);
+    const dlResp = await globalThis.fetch(pdfUrl, {
+      headers: { "User-Agent": "RCPBot/1.0" },
+      redirect: "follow",
+    });
+    if (!dlResp.ok) throw new Error(`HTTP ${dlResp.status} downloading PDF`);
+    const pdfBuffer = Buffer.from(await dlResp.arrayBuffer());
+    console.log(`[Takeoff/Claude] PDF: ${Math.round(pdfBuffer.length / 1024 / 1024 * 10) / 10}MB`);
+
+    if (pdfBuffer.length <= MAX_CHUNK_BYTES) {
+      readyChunks.push(new Uint8Array(pdfBuffer));
+    } else {
+      const srcPdf = await PDFDocument.load(pdfBuffer);
+      const totalPages = srcPdf.getPageCount();
+      console.log(`[Takeoff/Claude] PDF too large — splitting ${totalPages} pages adaptively`);
+      const segments: Array<[number, number]> = [[0, totalPages]];
+      while (segments.length > 0) {
+        const [start, end] = segments.shift()!;
+        const pageIndices = Array.from({ length: end - start }, (_, i) => start + i);
+        const chunkPdf = await PDFDocument.create();
+        const copied = await chunkPdf.copyPages(srcPdf, pageIndices);
+        copied.forEach(p => chunkPdf.addPage(p));
+        const bytes = await chunkPdf.save();
+        if (bytes.length > MAX_CHUNK_BYTES && (end - start) > 1) {
+          const mid = Math.floor((start + end) / 2);
+          segments.unshift([mid, end]);
+          segments.unshift([start, mid]);
+        } else {
+          readyChunks.push(bytes);
+        }
+      }
+    }
+  }
+
+  console.log(`[Takeoff/Claude] ${readyChunks.length} chunk(s) ready — starting multi-pass extraction`);
+
+  const chunkRaws: any[] = [];
+  for (let i = 0; i < readyChunks.length; i++) {
+    const pass1 = await runClaudePass1(anthropic, readyChunks[i], i, readyChunks.length);
+    const hasBars = Array.isArray(pass1?.bars) && pass1.bars.length > 0;
+    let merged = pass1;
+    if (hasBars) {
+      try {
+        const pass2 = await runClaudePass2(anthropic, readyChunks[i], i, readyChunks.length, pass1);
+        merged = mergeChunkExtractions(pass1, pass2);
+        console.log(`[Takeoff/Claude] chunk ${i + 1} merged: ${merged.bars?.length ?? 0} bars, ${merged.otherMaterials?.length ?? 0} other`);
+      } catch (e: any) {
+        console.warn(`[Takeoff/Claude] pass2 skipped for chunk ${i + 1}: ${e?.message || e}`);
+      }
+    }
+    chunkRaws.push(merged);
+  }
+
+  const consolidated = await runClaudeConsolidation(anthropic, chunkRaws);
+  console.log(`[Takeoff/Claude] consolidated — fab: ${consolidated.fabricatedBars?.length ?? 0}, stock: ${consolidated.stockBars?.length ?? 0}, other: ${consolidated.otherMaterials?.length ?? 0}`);
+
+  return buildFromCutSheet(consolidated, products);
+}
+
 // ── Core takeoff function ────────────────────────────────────────────────────
 // planSourceUrl: the raw external URL from the customer's message (Drive/Dropbox/etc.)
 //   When provided and PERPLEXITY_API_KEY is set, sonar-pro reads the document directly.
@@ -804,6 +1179,21 @@ export async function performTakeoff(
 
   const pdfUrls = mediaItems.filter(u => u.startsWith("pdf::")).map(u => u.slice(5));
   const imageUrls = mediaItems.filter(u => !u.startsWith("pdf::") && !u.startsWith("__"));
+
+  // Preferred path: Claude multi-pass (PDFs only — Claude reads PDFs natively).
+  // Falls back to GPT-4o two-pass pipeline on error or if ANTHROPIC_API_KEY is missing.
+  if (pdfUrls.length > 0 && process.env.ANTHROPIC_API_KEY) {
+    try {
+      const result = await performClaudeTakeoff(pdfUrls, products);
+      if (result.lineItems && result.lineItems.length > 0) {
+        console.log(`[Takeoff] Claude pipeline succeeded: ${result.lineItems.length} line item(s)`);
+        return result;
+      }
+      console.warn(`[Takeoff] Claude pipeline returned 0 items — falling back to GPT-4o`);
+    } catch (err: any) {
+      console.error(`[Takeoff] Claude pipeline failed (${err?.message || err}) — falling back to GPT-4o`);
+    }
+  }
 
   if (pdfUrls.length > 0) {
     const MAX_CHUNK_BYTES = 38 * 1024 * 1024;
