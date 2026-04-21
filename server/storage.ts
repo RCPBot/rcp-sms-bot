@@ -147,8 +147,11 @@ export class Storage implements IStorage {
       .get();
     if (completed) {
       const nextStage = completed.stage === "invoiced" ? "invoiced" : "ordering";
+      // Clear pendingImagesJson on reactivation — otherwise PDFs / base64 images
+      // from the prior SQLite-persisted session bleed into the new conversation
+      // and contaminate any future takeoff.
       return db.update(conversations)
-        .set({ status: "active", stage: nextStage, updatedAt: new Date() })
+        .set({ status: "active", stage: nextStage, pendingImagesJson: null, updatedAt: new Date() })
         .where(eq(conversations.id, completed.id))
         .returning().get();
     }
@@ -158,6 +161,7 @@ export class Storage implements IStorage {
       phone,
       status: "active",
       stage: "greeting",
+      pendingImagesJson: null,
       createdAt: new Date(),
       updatedAt: new Date(),
     }).returning().get();

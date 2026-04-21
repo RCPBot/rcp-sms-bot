@@ -14,7 +14,27 @@
  */
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
+import * as fs from "fs";
 import type { Product, LineItem, FabItem } from "@shared/schema";
+
+// Filter media items to only PDFs whose local file still exists on disk.
+// Skips any base64 image data, stale tmp PDFs, or non-PDF entries — these
+// bleed into pendingImagesJson across sessions and cause garbage extraction.
+export function filterValidPlanItems(items: string[]): string[] {
+  return items.filter(url => {
+    if (typeof url !== "string") return false;
+    if (!url.startsWith("pdf::")) return false;
+    const raw = url.slice(5);
+    // Map tmp URL back to disk path for existence check
+    const path = raw.replace(/^https?:\/\/localhost:\d+\/api\/tmp\//, "/tmp/");
+    if (path.startsWith("/tmp/")) {
+      try { fs.accessSync(path); return true; } catch { return false; }
+    }
+    // External URLs (Drive/Dropbox etc.) — keep them, they'll be re-downloaded
+    if (/^https?:\/\//.test(raw)) return true;
+    return false;
+  });
+}
 
 let _client: OpenAI | null = null;
 function getClient(): OpenAI {
@@ -316,7 +336,7 @@ Put the arithmetic inline in the "math" field for every record.
 • DRILLED PIER VERTICALS (fab):     qty = bars_per_pier × pier_count.  cutLen = pier_depth + 2ft stub/hook.
 • DRILLED PIER TIES (fab):          qty = ceil(pier_depth_ft / spacing_ft) × pier_count.  cutLen = π × cage_OD + 1ft.
 • GRADE-BEAM CONTINUOUS (stock):    qty = stick_count;  cutLen = 20ft or 40ft.  totalLF = bars_per_beam × beam_LF × 1.10 (10% lap).
-• GRADE-BEAM STIRRUPS (fab):        qty = ceil(beam_LF / spacing_ft) + 1.  cutLen = 2×(inside_w + inside_h)/12 + 1ft hooks.
+• GRADE-BEAM STIRRUPS (fab):        qty = ceil(beam_LF / spacing_ft) + 1.  Use the EXPLICIT inside dimensions shown in the BEND SCHEDULE for cutLen — never derive from beam cross-section. If no schedule dims, use the bend mark number only and leave cutLen as shown on the drawing.
 • CORNER BARS (fab):                qty = intersection_count × bars_per_intersection.  cutLen = leg_A + leg_B.
 • SLAB MAT (stock):                 totalLF = 2 × floor_SF × (1 + lap%);  qty = ceil(totalLF / 20).  cutLen = 20.
 • CURB L-BARS (fab):                qty = perimeter_ft / spacing_ft;  cutLen = legA + legB (e.g. 1+1 = 2ft).
@@ -977,13 +997,19 @@ For EACH bar entry, emit ONE object in the bars[] array with:
     "4'-0\\""  → 4.0
     "3'-6\\""  → 3.5
     "6'-0\\""  → 6.0
-- legDims: (optional) for bent bars, inside leg dimensions in inches, e.g. ["11","40"] for an 11x40 stirrup (13" beam minus 2" cover = 11" inside; 42" beam minus 2" = 40").
+- legDims: (optional) for bent bars, inside leg dimensions in inches, EXACTLY as shown in the BEND SCHEDULE table for that mark number.
+    • If the BEND SCHEDULE shows explicit inside dimensions (e.g. "6×24" or "6\\"×24\\""), use those values EXACTLY: ["6","24"].
+    • If the bend schedule only shows a mark number (e.g. "501") with no explicit dimensions, leave legDims as [markNumber] (e.g. ["501"]) — do NOT guess or calculate from beam size.
+    • For stirrup dimensions, use ONLY what is explicitly shown in the BEND SCHEDULE table. Do not calculate or infer dimensions from beam sizes.
+- bendDimensions: (optional) same as legDims — the physical inside width × height of the bent bar shape, taken verbatim from the bend schedule. NEVER derive from beam cross-section. NEVER use spacing notes (e.g. "18\\" OC", "12\\" OC") as bend dimensions — spacing belongs in placementNote only.
+- placementNote: (optional) the spacing / placement note for this mark, e.g. "18\\" OC", "12\\" OC", "@ 16 in centers". This is separate from bendDimensions.
 - location: the NOTE column value or section label verbatim, e.g. "Foundation 14\\" OCEW", "Short beam 3 CONT T&B", "Long beam stirrup 18\\" OC", "Sumpout U-tie", "Column 501", "Pilaster hooked".
 
 IMPORTANT:
 - Return EVERY row of the bar list as a separate object. Do NOT collapse multiple rows.
 - Convert ALL lengths to decimal feet.
-- For stirrups/ties inside dimensions: subtract 2" from beam width and height for cover.
+- For stirrup / tie inside dimensions: use ONLY the explicit values shown in the BEND SCHEDULE table (e.g. "6×24" → ["6","24"]). Do NOT calculate or infer dimensions from beam width/height — that rule was wrong and produced incorrect dimensions for non-standard stirrups. If no explicit dimensions are shown, record the bend mark number only.
+- Spacing notes like "18\\" OC" or "12\\" OC" go in placementNote, NEVER in legDims / bendDimensions.
 - Multiply by repetition factors ("×4 LOCATIONS", "4 PLACES") when present.
 - Straight bars (no mark, no bend) → isFabricated: false. Everything else (stirrups, U-ties, L-hooks, bent bars with mark numbers like 501/601/701/201/401/504/500) → isFabricated: true.
 - Bar sizes are integers 3 through 11 only.
@@ -1002,7 +1028,9 @@ Return ONLY valid JSON — no prose, no markdown fences:
       "size": "#3",
       "qty": 794,
       "cutLengthFt": 8.167,
-      "legDims": ["11","40"],
+      "legDims": ["6","24"],
+      "bendDimensions": ["6","24"],
+      "placementNote": "18\\" OC",
       "location": "Short beam stirrup @ 18\\" OC"
     },
     {
@@ -1292,8 +1320,14 @@ export async function performTakeoff(
   // The planSourceUrl is preserved for future use (e.g. public web-hosted plan pages).
   // All plan takeoffs route through the GPT-4o two-pass pipeline below.
 
-  const pdfUrls = mediaItems.filter(u => u.startsWith("pdf::")).map(u => u.slice(5));
-  const imageUrls = mediaItems.filter(u => !u.startsWith("pdf::") && !u.startsWith("__"));
+  // Defensive filter — strip stale PDFs from prior sessions and non-PDF items
+  // (base64 JPEG data URLs, random images) that may be lingering in pendingImagesJson.
+  const validItems = filterValidPlanItems(mediaItems);
+  if (validItems.length !== mediaItems.length) {
+    console.log(`[Takeoff] Filtered out ${mediaItems.length - validItems.length} stale/invalid item(s) — kept ${validItems.length} valid PDF(s)`);
+  }
+  const pdfUrls = validItems.filter(u => u.startsWith("pdf::")).map(u => u.slice(5));
+  const imageUrls = validItems.filter(u => !u.startsWith("pdf::") && !u.startsWith("__"));
 
   // Preferred path: Claude multi-pass (PDFs only — Claude reads PDFs natively).
   // Falls back to GPT-4o two-pass pipeline on error or if ANTHROPIC_API_KEY is missing.

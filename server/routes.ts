@@ -176,20 +176,13 @@ export function registerRoutes(httpServer: Server, app: Express) {
           existingConv.stage !== "invoice_review"
         ) {
           console.log(`[MMS] Verified customer (conv ${existingConv.id}, stage=${existingConv.stage}) — firing takeoff from MMS handler`);
-          storage.updateConversation(existingConv.id, { stage: "plan_processing" });
-          // Persist the MMS PDFs so retries / crash recovery can find them
-          try {
-            const _parsedExisting = existingConv.pendingImagesJson ? JSON.parse(existingConv.pendingImagesJson) : [];
-            const existing: string[] = Array.isArray(_parsedExisting) ? _parsedExisting : [];
-            const merged = [...existing];
-            for (const u of mmsPdfUrls) {
-              const prefixed = `pdf::${u}`;
-              if (!merged.includes(prefixed)) merged.push(prefixed);
-            }
-            storage.updateConversation(existingConv.id, { pendingImagesJson: JSON.stringify(merged) });
-          } catch (persistErr: any) {
-            console.warn(`[MMS] Failed to persist MMS PDFs to pendingImagesJson: ${persistErr?.message}`);
-          }
+          // Overwrite pendingImagesJson with ONLY the freshly downloaded MMS PDFs —
+          // do NOT merge with stale prior-session entries. Any old PDFs, base64
+          // images, or cross-session leftovers must not contaminate this takeoff.
+          storage.updateConversation(existingConv.id, {
+            stage: "plan_processing",
+            pendingImagesJson: JSON.stringify(mmsPdfUrls.map(u => `pdf::${u}`)),
+          });
 
           const ack = "Got your plan set! Give me a moment to read it and build your cut sheet and placement drawing...";
           storage.addMessage({ conversationId: existingConv.id, direction: "outbound", body: ack });
@@ -205,10 +198,9 @@ export function registerRoutes(httpServer: Server, app: Express) {
             body: bodyWithMedia,
           });
 
-          const takeoffImages = [
-            ...mediaUrls,
-            ...pdfUrls.map(u => `pdf::${u}`),
-          ];
+          // Pass ONLY the newly downloaded MMS PDF paths — NOT the full
+          // pendingImagesJson, which can contain stale entries from prior sessions.
+          const takeoffImages = mmsPdfUrls.map(u => `pdf::${u}`);
           const rawPlanUrlFromMms = (() => {
             const urls = extractUrls(cleanBody);
             return urls.length > 0 ? urls[0] : undefined;
@@ -856,7 +848,8 @@ export function registerRoutes(httpServer: Server, app: Express) {
         console.error(`[Takeoff] Zero line items — imageUrls: ${JSON.stringify(imageUrls.map(u => u.substring(0,80)))}`);
         storage.addMessage({ conversationId, direction: "outbound", body: errMsg });
         await sendSms(phone, errMsg);
-        storage.updateConversation(conversationId, { stage: "ordering" });
+        // Clear pendingImagesJson so stale PDFs don't bleed into the next takeoff
+        storage.updateConversation(conversationId, { stage: "ordering", pendingImagesJson: null });
         return;
       }
 
@@ -961,7 +954,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
         const noPrice = `We were able to identify the materials in your plan set but couldn't determine quantities automatically. Please call us at 469-631-7730 and we'll put together a manual quote for you.\n\nItems identified:\n${unpricedItems.map(i => `- ${i.name}`).join("\n")}`;
         storage.addMessage({ conversationId, direction: "outbound", body: noPrice });
         await sendSms(phone, noPrice);
-        storage.updateConversation(conversationId, { stage: "ordering" });
+        storage.updateConversation(conversationId, { stage: "ordering", pendingImagesJson: null });
         return;
       }
       const top5 = pricedItems.map(i => `${i.qty > 1 ? i.qty + "x " : ""}${i.name}: $${i.amount.toFixed(2)}`).join("\n");
@@ -991,7 +984,9 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
       storage.addMessage({ conversationId, direction: "outbound", body: replyText });
       await sendSms(phone, replyText);
-      storage.updateConversation(conversationId, { stage: "estimating" });
+      // Clear pendingImagesJson — these PDFs have been processed and must not
+      // be re-used on any future message in this conversation.
+      storage.updateConversation(conversationId, { stage: "estimating", pendingImagesJson: null });
 
       if (estimateId) {
         pollEstimateApproval(savedEstimate.id, estimateId, conversationId, phone, takeoffResult.projectName);
@@ -1002,7 +997,8 @@ export function registerRoutes(httpServer: Server, app: Express) {
       const errMsg = `Something went wrong while reading your plan set. Please call us at 469-631-7730 and we\'ll get you a quote right away — usually within the hour.`;
       storage.addMessage({ conversationId, direction: "outbound", body: errMsg });
       await sendSms(phone, errMsg);
-      storage.updateConversation(conversationId, { stage: "ordering" });
+      // Also clear pendingImagesJson on error so a retry doesn't pick up stale data
+      storage.updateConversation(conversationId, { stage: "ordering", pendingImagesJson: null });
     }
   }
 
