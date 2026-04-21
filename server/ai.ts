@@ -158,6 +158,26 @@ ANYTHING ELSE = FABRICATION-1 at $0.75/lb:
 - Any shape not listed above (U-bars, J-hooks, hairpins, custom bends, etc.)
 - Rings in sizes other than 8", 12", 18", 24"
 
+FABRICATION PRICING RULE (CRITICAL — NEVER VIOLATE):
+- Straight stock bars (no bends) → priced per bar from the QBO product list (e.g. #3 20' = $4.28/bar)
+- ALL bent/fabricated bars (stirrups, ties, rings, L-hooks, 90° hooks, 180° hooks, spirals, any custom bend) → ALWAYS use Fabrication-1 at $0.75/lb. Even if a size sounds close to a stock shape above, if it doesn't match EXACTLY, it's Fabrication-1.
+  - Calculate cut length using the bend formulas below
+  - Calculate total weight = pieces × cut_length_ft × unit_weight_lb_per_ft
+  - Line item: qboItemId="1010000301", qty=total_weight_lbs, unitPrice=0.75
+  - NEVER quote a bent bar at a flat per-piece price. NEVER invent a per-piece price for stirrups/ties/rings/hooks.
+  - Example of the BUG to avoid: quoting "12"x6" #3 stirrups" at $0.9165/pc is WRONG. Correct is: cut length = 2×(12+6) + 8 = 44" = 3.67ft; weight per pc = 3.67 × 0.376 = 1.38 lbs; price per pc = 1.38 × $0.75 = $1.035 → invoice as Fabrication-1, qty=total_lbs, unitPrice=0.75.
+
+CUT LENGTH FORMULAS:
+- Closed stirrup / rectangular tie: cut length = 2×(width_in + height_in) + 8" for standard 135° seismic hooks (use +6" for 90° hooks). Convert to feet (÷12).
+  Example: 6"×24" stirrup = 2×(6+24) + 8 = 68" = 5.67 ft
+- Ring (circular): cut length = π × diameter_in + 6" (hook extension). Convert to feet.
+  Example: 12" ring = π×12 + 6 = 43.7" = 3.64 ft
+- L-hook (one end): cut length = straight_length_in + 12 × bar_diameter_in. Convert to feet.
+- 180° hook: cut length = straight_length_in + 4 × bar_diameter_in + 3". Convert to feet.
+
+UNIT WEIGHTS (lb/ft): #3=0.376, #4=0.668, #5=1.043, #6=1.502, #7=2.044, #8=2.670, #9=3.400, #10=4.303, #11=5.313
+BAR DIAMETERS (in): #3=0.375, #4=0.500, #5=0.625, #6=0.750, #7=0.875, #8=1.000, #9=1.128, #10=1.270, #11=1.410
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CUSTOM FABRICATION QUOTING
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -682,15 +702,31 @@ For stock shapes: qty = piece count, unitPrice = per-piece price from product li
 
 Everything else = Fabrication-1 (priced by weight at $0.75/lb):
 - ANY stirrup in a bar size other than #3 (e.g. #4 stirrups, #5 stirrups)
-- ANY stirrup with dimensions not listed above (e.g. 12x24)
+- ANY stirrup with dimensions not listed above (e.g. 12x24, 12x6, etc.)
 - ANY corner bar not 2ftx2ft, or in a bar size other than #4/#5/#6
 - ANY ring not in the 4 stock sizes
-- Any other bent bar: U-bars, J-hooks, hairpins, L-bars with custom dims, etc.
+- Any other bent bar: U-bars, J-hooks, L-hooks, 90°/180° hooks, hairpins, spirals, L-bars with custom dims, etc.
 For Fabrication-1: qty = total weight in lbs, unitPrice = 0.75, amount = total_weight * 0.75
 - Total weight = pieces * cut_length_ft * weight_per_ft
 - Set description to the full fab spec: e.g. "500 #4 stirrups 12x24 w/ std hooks — 6.5 ft cut — 2171 lbs"
 - Fabrication-1 qboItemId is ALWAYS "1010000301", qty = total lbs, unitPrice = 0.75
 - qboItemId MUST be "1010000301" (never use "CUSTOM" for Fabrication-1)
+
+BENT BAR EXTRACTION RULE (CRITICAL):
+For ANY bent/fabricated bar (stirrup, tie, ring, L-hook, 90°/180° hook, spiral, custom bend):
+  - qboItemId MUST be "1010000301" (Fabrication-1). Never use any other product ID for bent bars.
+  - qty MUST be the total weight in pounds (not the piece count).
+  - unitPrice MUST be 0.75. Never a per-piece price.
+  - NEVER match a bent bar to a straight-bar QBO product and NEVER invent a per-piece price for stirrups/ties/rings/hooks.
+Only straight stock bars match QBO product list entries by bar size and length.
+
+CUT LENGTH FORMULAS (use these to compute total weight):
+- Closed stirrup/rectangular tie: cut_in = 2×(width_in + height_in) + 8 for 135° seismic hooks (or +6 for 90° hooks); cut_ft = cut_in / 12
+- Ring (circular): cut_in = π × diameter_in + 6; cut_ft = cut_in / 12
+- L-hook: cut_in = straight_length_in + 12 × bar_diameter_in; cut_ft = cut_in / 12
+- 180° hook: cut_in = straight_length_in + 4 × bar_diameter_in + 3; cut_ft = cut_in / 12
+BAR DIAMETERS (in): #3=0.375, #4=0.500, #5=0.625, #6=0.750, #7=0.875, #8=1.000, #9=1.128, #10=1.270, #11=1.410
+Total weight (lbs) = pieces × cut_ft × weight_per_ft (from BAR WEIGHTS above)
 
 Return JSON in this exact format:
 {
