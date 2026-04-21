@@ -161,6 +161,69 @@ export function registerRoutes(httpServer: Server, app: Express) {
     if (mmsPdfUrls.length > 0) {
       pdfUrls.push(...mmsPdfUrls);
       console.log(`[MMS] Added ${mmsPdfUrls.length} MMS PDF(s) to pdfUrls`);
+
+      // ── Trigger takeoff IMMEDIATELY after MMS PDF download completes ─────
+      // Must fire here (inside the async download scope) because the early
+      // trigger further down can race or be bypassed by other gating logic.
+      try {
+        const existingConv = storage.getConversationByPhone(cleanPhone);
+        if (
+          existingConv &&
+          existingConv.verified &&
+          existingConv.stage !== "plan_processing" &&
+          existingConv.stage !== "takeoff_pending" &&
+          existingConv.stage !== "estimating" &&
+          existingConv.stage !== "invoice_review"
+        ) {
+          console.log(`[MMS] Verified customer (conv ${existingConv.id}, stage=${existingConv.stage}) — firing takeoff from MMS handler`);
+          storage.updateConversation(existingConv.id, { stage: "plan_processing" });
+          // Persist the MMS PDFs so retries / crash recovery can find them
+          try {
+            const _parsedExisting = existingConv.pendingImagesJson ? JSON.parse(existingConv.pendingImagesJson) : [];
+            const existing: string[] = Array.isArray(_parsedExisting) ? _parsedExisting : [];
+            const merged = [...existing];
+            for (const u of mmsPdfUrls) {
+              const prefixed = `pdf::${u}`;
+              if (!merged.includes(prefixed)) merged.push(prefixed);
+            }
+            storage.updateConversation(existingConv.id, { pendingImagesJson: JSON.stringify(merged) });
+          } catch (persistErr: any) {
+            console.warn(`[MMS] Failed to persist MMS PDFs to pendingImagesJson: ${persistErr?.message}`);
+          }
+
+          const ack = "Got your plan set! Give me a moment to read it and build your cut sheet and placement drawing...";
+          storage.addMessage({ conversationId: existingConv.id, direction: "outbound", body: ack });
+          try { await sendSms(cleanPhone, ack); } catch (smsErr: any) {
+            console.warn(`[MMS] Ack SMS failed: ${smsErr?.message}`);
+          }
+
+          // Record inbound message before we return so the conversation log reflects it
+          const bodyWithMedia = cleanBody || `[📎 PDF attached]`;
+          storage.addMessage({
+            conversationId: existingConv.id,
+            direction: "inbound",
+            body: bodyWithMedia,
+          });
+
+          const takeoffImages = [
+            ...mediaUrls,
+            ...pdfUrls.map(u => `pdf::${u}`),
+          ];
+          const rawPlanUrlFromMms = (() => {
+            const urls = extractUrls(cleanBody);
+            return urls.length > 0 ? urls[0] : undefined;
+          })();
+          console.log(`[MMS] Calling handlePlanTakeoff(conv=${existingConv.id}, phone=${cleanPhone}, images=${takeoffImages.length})`);
+          handlePlanTakeoff(existingConv.id, cleanPhone, takeoffImages, rawPlanUrlFromMms).catch(err => {
+            console.error("[MMS] handlePlanTakeoff failed:", err);
+          });
+          return;
+        } else {
+          console.log(`[MMS] Not firing takeoff from MMS handler — conv=${existingConv?.id ?? "none"}, verified=${existingConv?.verified ?? "n/a"}, stage=${existingConv?.stage ?? "n/a"}`);
+        }
+      } catch (triggerErr: any) {
+        console.error(`[MMS] Error in immediate-takeoff trigger: ${triggerErr?.message}`);
+      }
     }
 
     // If a link was sent but we couldn't open it, notify the customer right away
@@ -765,17 +828,25 @@ export function registerRoutes(httpServer: Server, app: Express) {
   // ── Plan Takeoff Handler ──────────────────────────────────────────────────
   // planSourceUrl: raw Dropbox/Drive URL from the customer's message, forwarded to sonar-pro when available.
   async function handlePlanTakeoff(conversationId: number, phone: string, imageUrls: string[], planSourceUrl?: string) {
+    console.log(`[Takeoff] handlePlanTakeoff ENTER — conv=${conversationId}, phone=${phone}, imageUrls.length=${imageUrls.length}, planSourceUrl=${planSourceUrl ?? "none"}`);
     const conv = storage.getConversation(conversationId);
-    if (!conv) return;
+    if (!conv) {
+      console.error(`[Takeoff] handlePlanTakeoff — conversation ${conversationId} not found, aborting`);
+      return;
+    }
 
     const ackMsg = `Got it! I'm analyzing your plan set now. This takes about 30–60 seconds — I'll send your estimate as soon as it's ready.`;
     storage.addMessage({ conversationId, direction: "outbound", body: ackMsg });
-    await sendSms(phone, ackMsg);
+    try { await sendSms(phone, ackMsg); } catch (smsErr: any) {
+      console.warn(`[Takeoff] Ack SMS failed: ${smsErr?.message}`);
+    }
 
     const products = storage.getAllProducts();
+    console.log(`[Takeoff] Loaded ${products.length} products — calling performTakeoff()`);
 
     try {
       const takeoffResult = await performTakeoff(imageUrls, products, planSourceUrl);
+      console.log(`[Takeoff] performTakeoff returned — lineItems=${takeoffResult?.lineItems?.length ?? 0}, fabItems=${takeoffResult?.fabItems?.length ?? 0}, project="${takeoffResult?.projectName ?? ""}"`);
 
       if (!takeoffResult.lineItems || takeoffResult.lineItems.length === 0) {
         const hasPdf = imageUrls.some(u => u.startsWith("pdf::"));
