@@ -162,6 +162,24 @@ async function qboPostWithDocRetry(path: string, body: Record<string, any>): Pro
 }
 
 // ── Sync products/services from QBO ──────────────────────────────────────────
+// Returns all active QBO items with live pricing — used by /api/qbo/items
+export async function getQboItems(): Promise<Array<{
+  id: string; name: string; description: string | null;
+  unitPrice: number | null; type: string; active: boolean;
+}>> {
+  const data = await qboGet(
+    "/query?query=SELECT%20*%20FROM%20Item%20WHERE%20Active%3Dtrue%20MAXRESULTS%20500"
+  );
+  return (data.QueryResponse?.Item || []).map((item: any) => ({
+    id: item.Id,
+    name: item.Name,
+    description: item.Description || null,
+    unitPrice: item.UnitPrice ?? null,
+    type: item.Type,
+    active: item.Active !== false,
+  }));
+}
+
 export async function syncProducts(): Promise<void> {
   try {
     const data = await qboGet(

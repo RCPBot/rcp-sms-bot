@@ -4,7 +4,7 @@ import express from "express";
 import { storage } from "./storage";
 import { sendSms, isTwilioConfigured, sendPaymentLinkEmail } from "./sms";
 import { processMessage, extractOrderFromConversation, extractCustomerInfo, isAiConfigured } from "./ai";
-import { syncProducts, findOrCreateCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice, updateRailwayEnvVar, setLiveRefreshToken, getOrCreateBotCustomer } from "./qbo";
+import { syncProducts, findOrCreateCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice, updateRailwayEnvVar, setLiveRefreshToken, getOrCreateBotCustomer, getQboItems } from "./qbo";
 import { performTakeoff } from "./takeoff";
 import { resolveLinksFromText, extractUrls } from "./link-resolver";
 import { generateCutSheetPdf, emailCutSheet, emailCutSheetToCustomer, generatePlacementDrawingPdf, forwardPlansToOffice, generateBidPdf, emailBidPdf, OFFICE_EMAIL } from "./cutsheet";
@@ -84,6 +84,20 @@ async function startProductSync() {
 export function registerRoutes(httpServer: Server, app: Express) {
   // Register the token-export endpoint FIRST to guarantee no catch-all/static
   // middleware can intercept it. Returns JSON of current QBO refresh token state.
+
+  // GET /api/qbo/items — returns all active QBO items with live pricing
+  app.get('/api/qbo/items', async (_req, res) => {
+    try {
+      if (!isQboConfigured()) {
+        return res.status(503).json({ error: 'QBO not configured' });
+      }
+      const items = await getQboItems();
+      res.json({ count: items.length, items, fetchedAt: new Date().toISOString() });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get('/api/qbo/token', async (_req, res) => {
     try {
       const token = await storage.getSetting('qbo_refresh_token');
