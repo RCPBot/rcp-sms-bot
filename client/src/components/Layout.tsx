@@ -1,4 +1,4 @@
-import { Link, useLocation } from "wouter";
+import { useLocation } from "wouter";
 import { MessageSquare, ShoppingCart, Package, Settings, Zap, History } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
@@ -59,19 +59,19 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           {navItems.map(({ href, label, icon: Icon }) => {
             const active = location === href || (href !== "/" && location.startsWith(href));
             return (
-              <Link key={href} href={href}>
-                <a
-                  data-testid={`nav-${label.toLowerCase()}`}
-                  className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors ${
-                    active
-                      ? "bg-primary text-primary-foreground font-medium"
-                      : "text-muted-foreground hover:text-foreground hover:bg-secondary"
-                  }`}
-                >
-                  <Icon className="w-4 h-4" />
-                  {label}
-                </a>
-              </Link>
+              <a
+                key={href}
+                href={`#${href}`}
+                data-testid={`nav-${label.toLowerCase()}`}
+                className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors ${
+                  active
+                    ? "bg-primary text-primary-foreground font-medium"
+                    : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+                }`}
+              >
+                <Icon className="w-4 h-4" />
+                {label}
+              </a>
             );
           })}
         </nav>

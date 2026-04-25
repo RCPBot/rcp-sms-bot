@@ -2,8 +2,6 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useParams, useLocation } from "wouter";
 import { useState } from "react";
-import { ArrowLeft, Send, Phone, Mail, Building, MapPin, FileText, ExternalLink } from "lucide-react";
-import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
@@ -55,11 +53,9 @@ export default function ConversationDetail() {
       <div className="flex-1 flex flex-col">
         {/* Header */}
         <div className="px-6 py-4 border-b border-border flex items-center gap-4">
-          <Link href="/">
-            <a className="text-muted-foreground hover:text-foreground transition-colors">
-              <ArrowLeft className="w-4 h-4" />
-            </a>
-          </Link>
+          <a href="#/" className="text-muted-foreground hover:text-foreground transition-colors">
+            <ArrowLeft className="w-4 h-4" />
+          </a>
           <div>
             <div className="font-semibold text-foreground text-sm">
               {conv.customerName || conv.phone}

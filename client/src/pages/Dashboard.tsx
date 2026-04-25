@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
-import { Link } from "wouter";
+import { useLocation } from "wouter";
 import { MessageSquare, Clock, CheckCircle, DollarSign, Phone } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -37,6 +37,7 @@ function formatPhone(phone: string): string {
 }
 
 export default function Dashboard() {
+  const [, navigate] = useLocation();
   const { data: conversations = [], isLoading } = useQuery<ConversationWithMessages[]>({
     queryKey: ["/api/conversations"],
     queryFn: () => apiRequest("GET", "/api/conversations").then(r => r.json()),
@@ -96,11 +97,12 @@ export default function Dashboard() {
               {conversations.map(conv => {
                 const lastMsg = conv.messages?.[conv.messages.length - 1];
                 return (
-                  <Link key={conv.id} href={`/conversations/${conv.id}`}>
-                    <a
-                      data-testid={`conversation-${conv.id}`}
-                      className="flex items-center gap-4 px-6 py-4 hover:bg-secondary/50 transition-colors cursor-pointer"
-                    >
+                  <div
+                    key={conv.id}
+                    data-testid={`conversation-${conv.id}`}
+                    onClick={() => navigate(`/conversations/${conv.id}`)}
+                    className="flex items-center gap-4 px-6 py-4 hover:bg-secondary/50 transition-colors cursor-pointer"
+                  >
                       {/* Avatar */}
                       <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
                         <span className="text-primary font-bold text-sm">
@@ -134,8 +136,7 @@ export default function Dashboard() {
                           {conv.messages?.length || 0} msgs
                         </div>
                       </div>
-                    </a>
-                  </Link>
+                  </div>
                 );
               })}
             </div>
