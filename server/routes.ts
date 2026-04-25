@@ -701,11 +701,16 @@ export function registerRoutes(httpServer: Server, app: Express) {
           });
 
           // Determine if this order will qualify for free delivery
-          // (We don't know the subtotal yet, so give them the conditional rule)
-          const FREE_DELIVERY_MILES = 30;
-          const FREE_DELIVERY_MIN = 1000;
-          if (distResult.miles <= FREE_DELIVERY_MILES) {
-            followUp = `${intent.text ? intent.text + " " : ""}Your job site is ${distResult.miles} mi away. Delivery is FREE on orders over $${FREE_DELIVERY_MIN.toLocaleString()} within ${FREE_DELIVERY_MILES} miles. Otherwise the fee is $${distResult.fee.toFixed(2)}. Ready to build your order?`;
+          // (We don't know the subtotal yet, so give them the applicable conditional rule)
+          const FREE_DELIVERY_TIERS = [
+            { miles: 65, minOrder: 8000 },
+            { miles: 55, minOrder: 4000 },
+            { miles: 40, minOrder: 2000 },
+            { miles: 30, minOrder: 1000 },
+          ];
+          const applicableTier = FREE_DELIVERY_TIERS.find(t => distResult.miles <= t.miles);
+          if (applicableTier) {
+            followUp = `${intent.text ? intent.text + " " : ""}Your job site is ${distResult.miles} mi away. Delivery is FREE on orders of $${applicableTier.minOrder.toLocaleString()} or more. Otherwise the fee is $${distResult.fee.toFixed(2)}. Ready to build your order?`;
           } else {
             followUp = `${intent.text ? intent.text + " " : ""}Your job site is ${distResult.miles} mi away. Delivery fee will be $${distResult.fee.toFixed(2)}. Ready to build your order?`;
           }
@@ -921,16 +926,21 @@ export function registerRoutes(httpServer: Server, app: Express) {
         if (dist) { deliveryFee = dist.fee; deliveryMiles = dist.miles; }
       }
 
-      // Calculate totals — apply free delivery rule: $1,000+ order within 30 miles = free
-      const FREE_DELIVERY_MILES = 30;
-      const FREE_DELIVERY_MIN_ORDER = 1000;
+      // Calculate totals — tiered free delivery rules
       const subtotal = orderData.lineItems.reduce((sum, item) => sum + item.amount, 0);
+
+      // Tiered free delivery: (miles threshold, min order)
+      const FREE_DELIVERY_TIERS = [
+        { miles: 65, minOrder: 8000 },
+        { miles: 55, minOrder: 4000 },
+        { miles: 40, minOrder: 2000 },
+        { miles: 30, minOrder: 1000 },
+      ];
 
       const qualifiesFreeDelivery =
         orderData.deliveryType === "delivery" &&
         deliveryMiles !== undefined &&
-        deliveryMiles <= FREE_DELIVERY_MILES &&
-        subtotal >= FREE_DELIVERY_MIN_ORDER;
+        FREE_DELIVERY_TIERS.some(tier => deliveryMiles! <= tier.miles && subtotal >= tier.minOrder);
 
       if (qualifiesFreeDelivery) {
         deliveryFee = 0; // waive the fee
@@ -1874,7 +1884,27 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       });
 
       const subtotal = lineItems.reduce((s, l) => s + l.amount, 0);
-      const deliveryFee = deliveryAddress ? calcDeliveryFee(deliveryAddress) : 0;
+
+      // Tiered free delivery
+      const FREE_DELIVERY_TIERS_WEB = [
+        { miles: 65, minOrder: 8000 },
+        { miles: 55, minOrder: 4000 },
+        { miles: 40, minOrder: 2000 },
+        { miles: 30, minOrder: 1000 },
+      ];
+      let deliveryFee = 0;
+      let deliveryMilesWeb: number | undefined;
+      if (deliveryAddress) {
+        const dist = await calcDeliveryFee(deliveryAddress);
+        if (dist) {
+          deliveryMilesWeb = dist.miles;
+          const qualifies = FREE_DELIVERY_TIERS_WEB.some(
+            t => dist.miles <= t.miles && subtotal >= t.minOrder
+          );
+          deliveryFee = qualifies ? 0 : dist.fee;
+        }
+      }
+
       const preTax = subtotal + deliveryFee;
       const tax = Math.round(preTax * TAX_RATE * 100) / 100;
       const total = Math.round((preTax + tax) * 100) / 100;
