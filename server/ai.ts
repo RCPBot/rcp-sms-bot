@@ -34,10 +34,67 @@ async function callWithRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T
   throw new Error('Max retries exceeded');
 }
 
+/**
+ * Parse the inbound message for qty + bar-size orders and return server-computed
+ * exact line totals that the AI must use verbatim (never recalculate).
+ */
+function computePriceLookup(text: string, products: Product[]): string {
+  // Match patterns like: "600 pc of #3", "600 pieces of #3 rebar", "600 #3 20'", "600 sticks #3", "1 bundle of #4", etc.
+  const qtyBarRe = /(\d+)\s*(?:pc|pcs|pieces?|bars?|sticks?|bundles?|bdles?)?\s*(?:of\s+)?#(\d+)(?:\s+(?:rebar|bar|re-bar))?(?:\s+(20'|20\s*ft|40'|40\s*ft))?/gi;
+  const bundleRe = /(\d+)\s*(?:full\s+)?bundles?\s+(?:of\s+)?#(\d+)/gi;
+
+  const bundleSizes: Record<string, number> = { '3':266,'4':150,'5':96,'6':68,'7':50,'8':38,'9':30,'10':24,'11':18,'14':10,'18':6 };
+
+  const results: string[] = [];
+  let match: RegExpExecArray | null;
+
+  // Reset
+  qtyBarRe.lastIndex = 0;
+  while ((match = qtyBarRe.exec(text)) !== null) {
+    const qty = parseInt(match[1], 10);
+    const size = match[2];
+    const lengthRaw = match[3];
+    const length = lengthRaw && (lengthRaw.startsWith('40') ) ? "40'" : "20'";
+
+    // Check if this is a bundle order
+    const bundleMatch = /bundle/i.test(match[0]);
+    let pcs = qty;
+    if (bundleMatch && bundleSizes[size]) {
+      pcs = qty * bundleSizes[size];
+    }
+
+    // Find matching product
+    const sizeName = `#${size}`;
+    const product = products.find(p => {
+      if (!p.unitPrice) return false;
+      const name = p.name.toLowerCase();
+      return name.includes(sizeName.toLowerCase()) && name.includes(length.replace("'", ""));
+    });
+
+    if (product && product.unitPrice) {
+      const unitPrice = parseFloat(String(product.unitPrice));
+      const subtotal = pcs * unitPrice;
+      const tax = subtotal * 0.0825;
+      const total = subtotal + tax;
+      results.push(
+        `ORDER: ${pcs} pcs of ${sizeName} ${length} rebar` +
+        ` | unit=$${unitPrice} | subtotal=$${subtotal.toFixed(2)} | tax=$${tax.toFixed(2)} | total=$${total.toFixed(2)}`
+      );
+    }
+  }
+
+  if (results.length === 0) return '';
+
+  return `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\nSERVER-COMPUTED PRICE LOOKUP (USE VERBATIM — DO NOT RECALCULATE)\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `The following totals were computed server-side using exact QBO unit prices. ` +
+    `You MUST copy these dollar amounts exactly as shown — DO NOT round, recalculate, or derive your own totals.\n` +
+    results.join('\n');
+}
+
 function buildSystemPrompt(products: Product[], conv: Conversation): string {
   const productList = products.length > 0
     ? products.map(p =>
-        `- ${p.name}${p.description ? ": " + p.description : ""}${p.unitPrice ? " — $" + p.unitPrice + (p.unitOfMeasure ? "/" + p.unitOfMeasure : "") : " (price varies)"}`
+        `- ${p.name}${p.description ? ": " + p.description : ""}${p.unitPrice ? " — $" + parseFloat(String(p.unitPrice)).toFixed(5) + (p.unitOfMeasure ? "/" + p.unitOfMeasure : "") : " (price varies)"}`
       ).join("\n")
     : "- Products are loading from QuickBooks. Tell the customer you'll have pricing shortly.";
 
@@ -159,7 +216,7 @@ ANYTHING ELSE = FABRICATION-1 at $0.75/lb:
 - Rings in sizes other than 8", 12", 18", 24"
 
 FABRICATION PRICING RULE (CRITICAL — NEVER VIOLATE):
-- Straight stock bars (no bends) → priced per bar from the QBO product list. NEVER show a per-bar price to the customer — always show the line total (qty × exact unit price from the product list, do NOT round the unit price before multiplying). Example: 600 bars of #3 20' at $4.28195/bar = $2,569.17 subtotal — show $2,569.17, not $4.28/bar × 600.
+- Straight stock bars (no bends) → priced per bar from the QBO product list. If a SERVER-COMPUTED PRICE LOOKUP block is present in this prompt, you MUST use those exact dollar amounts verbatim — DO NOT recalculate. If no lookup block is present, show the line total as qty × exact unit price (do NOT round the unit price before multiplying).
 - ALL bent/fabricated bars (stirrups, ties, rings, L-hooks, 90° hooks, 180° hooks, spirals, any custom bend) → ALWAYS use Fabrication-1 at $0.75/lb. Even if a size sounds close to a stock shape above, if it doesn't match EXACTLY, it's Fabrication-1.
   - Calculate cut length using the bend formulas below
   - Calculate total weight = pieces × cut_length_ft × unit_weight_lb_per_ft
@@ -359,7 +416,7 @@ STEPS WHEN A CUSTOMER ORDERS CUSTOM FAB:
 ALWAYS include tax on EVERY price you quote — single items, bundles, stock shapes, everything.
 If quoting a stock item (e.g. "#3 8x24 stirrups"): price = qty × unit_price, then add 8.25% tax.
 Never show a price without the tax line below it.
-PRICING PRECISION: Always compute subtotal as qty × exact unit price from the product list (do NOT round the unit price before multiplying). Show the line total to 2 decimal places. This ensures the quote matches the invoice exactly. NEVER display a rounded per-bar price — always display the computed total.
+PRICING PRECISION: If a SERVER-COMPUTED PRICE LOOKUP block appears in this system prompt, those are the authoritative totals — copy them exactly, do NOT recalculate. For any order not covered by the lookup, compute subtotal as qty × exact unit price (do NOT round the unit price before multiplying). Show all dollar amounts to 2 decimal places.
 
 NEVER say you need to check with the team or that someone will follow up on fabrication pricing. You have everything you need to quote it right now.
 
@@ -568,6 +625,13 @@ export async function processMessage(
   const history = await storage.getMessages(conversation.id);
 
   let systemPrompt = buildSystemPrompt(products, conversation);
+
+  // Inject server-computed price lookup so AI never has to do the math itself
+  const priceLookup = computePriceLookup(inboundText, products);
+  if (priceLookup) {
+    systemPrompt += priceLookup;
+  }
+
   if (orderHistory) {
     systemPrompt += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCUSTOMER ORDER HISTORY (from QuickBooks)\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n${orderHistory}\nUse this to answer questions about past orders, totals, or invoice status. Tell them to call 469-631-7730 or check their email for the full invoice PDF.`;
   }
