@@ -2066,9 +2066,8 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
     });
   <\/script>`;
 
-      // Rewrite relative asset URLs to absolute (so assets still load from the upstream)
-      html = html.replace(/(src|href)="\.\/assets\//g, '$1="https://ai.rebarconcreteproducts.com/assets/');
-      html = html.replace(/(src|href)="\.\/([^"]+)"/g, '$1="https://ai.rebarconcreteproducts.com/$2"');
+      // Keep asset URLs as relative ./assets/ — they will be served by /chat-assets/* below
+      // (no rewriting needed — relative paths resolve correctly from /chat)
 
       // Inject our listener script just before </body>
       html = html.replace('</body>', LISTENER_SCRIPT + '\n</body>');
@@ -2080,5 +2079,36 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
     } catch (err: any) {
       res.status(502).send('Chat unavailable: ' + err.message);
     }
+  });
+
+  // ── /assets/* proxy — forward asset requests to ai.rebarconcreteproducts.com ──
+  // Needed because the /chat page loads JS/CSS as relative './assets/*' which resolves
+  // to this origin. We proxy them through to avoid CORS blocks.
+  app.get('/assets/:file', async (req, res) => {
+    // Only proxy if it looks like a hashed Vite asset (not an internal static file)
+    const file = req.params.file;
+    try {
+      const upstream = await fetch(`https://ai.rebarconcreteproducts.com/assets/${file}`);
+      if (!upstream.ok) { res.status(upstream.status).end(); return; }
+      const contentType = upstream.headers.get('content-type') || 'application/octet-stream';
+      const buf = await upstream.arrayBuffer();
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      res.send(Buffer.from(buf));
+    } catch (err: any) {
+      res.status(502).end();
+    }
+  });
+
+  // Also proxy logoheader.jpg and favicon.png used by the upstream app
+  app.get('/logoheader.jpg', async (_req, res) => {
+    try {
+      const upstream = await fetch('https://ai.rebarconcreteproducts.com/logoheader.jpg');
+      const buf = await upstream.arrayBuffer();
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.send(Buffer.from(buf));
+    } catch { res.status(502).end(); }
   });
 }
