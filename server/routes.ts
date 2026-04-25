@@ -739,7 +739,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
     try {
 
     const msgs = await storage.getMessages(conversationId);
-    const products = await storage.getAllProducts().filter(p => p.unitPrice !== null).slice(0, 80);
+    const products = (await storage.getAllProducts()).filter(p => p.unitPrice !== null).slice(0, 80);
 
     try {
       // Extract order details
@@ -1377,8 +1377,8 @@ export function registerRoutes(httpServer: Server, app: Express) {
       twilio: isTwilioConfigured(),
       qbo: isQboConfigured(),
       openai: isAiConfigured(),
-      products: await storage.getAllProducts().length,
-      conversations: await storage.getAllConversations().length,
+      products: (await storage.getAllProducts()).length,
+      conversations: (await storage.getAllConversations()).length,
     });
   });
 
