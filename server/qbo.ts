@@ -207,7 +207,7 @@ export async function syncProducts(): Promise<void> {
           qboItemId: item.Id,
           name: item.Name,
           description: item.Description || null,
-          unitPrice: item.UnitPrice || null,
+          unitPrice: item.UnitPrice ? Math.round(item.UnitPrice * 100) / 100 : null,
           unitOfMeasure: item.PurchaseTaxIncluded ? "each" : null,
           active: item.Active !== false,
           syncedAt: new Date(),
@@ -371,7 +371,7 @@ export async function createInvoice(params: {
     SalesItemLineDetail: {
       ItemRef: { value: item.qboItemId, name: item.name },
       Qty: item.qty,
-      UnitPrice: item.unitPrice,
+      UnitPrice: item.unitPrice ? Math.round(item.unitPrice * 100) / 100 : item.unitPrice,
     },
   }));
 
