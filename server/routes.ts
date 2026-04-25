@@ -1836,20 +1836,21 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
     try {
       const { customerName, customerEmail, customerPhone, customerCompany, deliveryAddress, items } = req.body;
 
-      if (!customerName || !customerEmail || !Array.isArray(items) || items.length === 0) {
-        return res.status(400).json({ error: "customerName, customerEmail, and items are required" });
+      if (!customerName || !customerPhone || !Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ error: "customerName, customerPhone, and items are required" });
       }
 
-      // Look up existing QBO customer only — no new customers created via web (fraud prevention)
+      // Look up existing QBO customer by name + phone — no new customers created via web (fraud prevention)
       const customerId = await findExistingCustomer({
         name: customerName,
-        email: customerEmail,
+        phone: customerPhone || "",
+        email: customerEmail || undefined,
       });
 
       if (!customerId) {
         return res.status(403).json({
           error: "customer_not_found",
-          message: `We don't have an account on file for "${customerName}". To place an order online, you'll need an account with us first. Please call us at 469-631-7730 or stop by 2112 N Custer Rd, McKinney, TX 75071 to get set up.`,
+          message: `We weren’t able to verify an account for “${customerName}” with that phone number. Please call us at 469-631-7730 or stop by 2112 N Custer Rd, McKinney, TX 75071 to get set up.`,
         });
       }
 

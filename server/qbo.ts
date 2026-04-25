@@ -312,41 +312,42 @@ export async function calcDeliveryFee(destinationAddress: string): Promise<{
 
 // ── Find existing QBO customer only (no create) ─────────────────────────────
 // Used for web orders — only existing customers can invoice to prevent fraud.
+// Verifies by account name + phone number match.
 export async function findExistingCustomer(params: {
   name: string;
-  email: string;
+  phone: string;
+  email?: string;
 }): Promise<string | null> {
-  // Search by email first
-  try {
-    const encoded = encodeURIComponent(`SELECT * FROM Customer WHERE PrimaryEmailAddr = '${params.email}'`);
-    const data = await qboGet(`/query?query=${encoded}`);
-    const customers = data.QueryResponse?.Customer || [];
-    if (customers.length > 0) return customers[0].Id;
-  } catch (_) {}
+  // Normalize phone to digits only for comparison
+  const normalizePhone = (p: string) => p.replace(/\D/g, "");
+  const inputPhone = normalizePhone(params.phone);
 
-  // Fall back to display name match
+  // Search by display name, then verify phone matches
   try {
     const encoded = encodeURIComponent(`SELECT * FROM Customer WHERE DisplayName = '${params.name}'`);
     const data = await qboGet(`/query?query=${encoded}`);
     const customers = data.QueryResponse?.Customer || [];
-    if (customers.length > 0) {
-      const customer = customers[0];
-      // Update their QBO record with email if missing
-      if (!customer.PrimaryEmailAddr?.Address && params.email) {
-        try {
-          await qboPost("/customer", {
-            Id: customer.Id,
-            SyncToken: customer.SyncToken,
-            sparse: true,
-            PrimaryEmailAddr: { Address: params.email },
-          });
-        } catch (_) {}
+    for (const customer of customers) {
+      const qboPhone = normalizePhone(customer.PrimaryPhone?.FreeFormNumber || "");
+      // Match if last 10 digits align (handles country code variations)
+      if (qboPhone && inputPhone && qboPhone.slice(-10) === inputPhone.slice(-10)) {
+        // Optionally update email on the record if provided and missing
+        if (params.email && !customer.PrimaryEmailAddr?.Address) {
+          try {
+            await qboPost("/customer", {
+              Id: customer.Id,
+              SyncToken: customer.SyncToken,
+              sparse: true,
+              PrimaryEmailAddr: { Address: params.email },
+            });
+          } catch (_) {}
+        }
+        return customer.Id;
       }
-      return customer.Id;
     }
   } catch (_) {}
 
-  return null; // Not found — do not create
+  return null; // Not found or phone didn't match — do not create
 }
 
 // ── Find or create a QBO customer ────────────────────────────────────────────
