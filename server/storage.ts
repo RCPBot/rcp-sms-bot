@@ -97,8 +97,8 @@ async function runMigrations() {
   `);
 }
 
-// Run migrations on startup (fire-and-forget, errors logged not thrown)
-runMigrations().catch(err => console.error("[DB] Migration error:", err));
+// Export so index.ts can await it before starting the server
+export { runMigrations };
 
 // ── Interface ─────────────────────────────────────────────────────────────────
 export interface IStorage {
