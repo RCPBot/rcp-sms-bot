@@ -45,11 +45,17 @@ async function fixPriceText(text: string): Promise<string> {
   qtyBarRe.lastIndex = 0;
   let totalFromItems = 0;
   let foundAny = false;
+  // Deduplicate: track which size+length combos we've already added
+  // so a message saying "925 pieces of #3" and "925 bars of #3" doesn't double-count
+  const seen = new Set<string>();
   while ((match = qtyBarRe.exec(text)) !== null) {
     const qty = parseInt(match[1], 10);
     const size = match[2];
     const lengthRaw = match[3];
     const length = lengthRaw && lengthRaw.startsWith('40') ? '40' : '20';
+    const key = `${qty}-${size}-${length}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
 
     const product = products.find(p => {
       if (!p.unitPrice) return false;
