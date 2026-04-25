@@ -737,11 +737,8 @@ export function registerRoutes(httpServer: Server, app: Express) {
     }
     orderConfirmationInProgress.add(conversationId);
     try {
-
-    const msgs = await storage.getMessages(conversationId);
-    const products = (await storage.getAllProducts()).filter(p => p.unitPrice !== null).slice(0, 80);
-
-    try {
+      const msgs = await storage.getMessages(conversationId);
+      const products = (await storage.getAllProducts()).filter(p => p.unitPrice !== null).slice(0, 80);
       // Extract order details
       const orderData = await extractOrderFromConversation(msgs, products);
       console.log("[Order] Extracted line items:", JSON.stringify(orderData.lineItems));
@@ -960,7 +957,6 @@ export function registerRoutes(httpServer: Server, app: Express) {
       const orderErrMsg = `We had trouble creating your invoice. Please try again in a moment or call us at 469-631-7730 and we'll get it sorted out.`;
       await storage.addMessage({ conversationId, direction: "outbound", body: orderErrMsg });
       try { await sendSms(phone, orderErrMsg); } catch {}
-    }
     } finally {
       orderConfirmationInProgress.delete(conversationId);
     }
