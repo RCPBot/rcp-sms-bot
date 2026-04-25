@@ -17,23 +17,16 @@
     <div id="root"></div>
   <script>
     // ── Prevent this iframe from scrolling the parent page ──
-    // Override focus() on all elements to prevent scroll-into-view
     (function() {
       var origFocus = HTMLElement.prototype.focus;
       HTMLElement.prototype.focus = function(opts) {
         origFocus.call(this, { preventScroll: true });
       };
-
-      // Also block scrollIntoView from propagating scroll up to parent
       var origScrollIntoView = Element.prototype.scrollIntoView;
       Element.prototype.scrollIntoView = function(opts) {
-        // Only scroll within this document, not the parent
         origScrollIntoView.call(this, opts);
-        // Tell parent to stay put
         try { window.parent.postMessage({ type: 'rcp-no-scroll' }, '*'); } catch(e) {}
       };
-
-      // Prevent the page from jumping when textarea auto-focuses
       document.addEventListener('focus', function(e) {
         if (e.target && (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT')) {
           var x = window.scrollX, y = window.scrollY;
