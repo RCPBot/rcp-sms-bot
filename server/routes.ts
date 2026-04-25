@@ -1880,13 +1880,11 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
 
       const { invoiceId, invoiceNumber, paymentLink } = await createInvoice({
         customerId,
+        customerEmail,
         lineItems,
         deliveryFee,
-        tax,
-        total,
         deliveryAddress: deliveryAddress || "",
-        projectAddress: "",
-        memo: `Web order via ai.rebarconcreteproducts.com`,
+        customerMemo: `Web order via ai.rebarconcreteproducts.com`,
       });
 
       // Email invoice link to customer
