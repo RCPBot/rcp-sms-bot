@@ -131,6 +131,24 @@ async function qboGet(path: string) {
   return res.json();
 }
 
+// Fetch shareable invoice/estimate link via include=invoiceLink (works without QBO Payments)
+async function getShareableLink(type: "invoice" | "estimate", id: string): Promise<string | null> {
+  try {
+    const { realmId } = cfg();
+    const token = await getAccessToken();
+    const res = await fetch(
+      `${QB_BASE}/${realmId}/${type}/${id}?include=invoiceLink&minorversion=75`,
+      { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const obj = type === "invoice" ? data?.Invoice : data?.Estimate;
+    return obj?.InvoiceLink || null;
+  } catch {
+    return null;
+  }
+}
+
 async function qboPost(path: string, body: object) {
   const { realmId } = cfg();
   const token = await getAccessToken();
@@ -415,22 +433,10 @@ export async function createInvoice(params: {
   const data = await qboPostWithDocRetry("/invoice", invoiceBody);
   const invoice = data.Invoice;
 
-  // Get the InvoiceLink (QBO Payments pay link)
-  let paymentLink: string | null = null;
-  try {
-    const linkData = await qboGet(`/invoice/${invoice.Id}/onlineinvoice`);
-    console.log("[QBO] onlineinvoice response:", JSON.stringify(linkData));
-    paymentLink = linkData?.InvoiceLink || null;
-  } catch (err) {
-    console.warn("[QBO] Could not get payment link:", err);
-  }
-
-  // Fallback: build a direct QBO invoice view link
-  if (!paymentLink) {
-    const { realmId } = cfg();
-    paymentLink = `https://app.qbo.intuit.com/app/invoice?txnId=${invoice.Id}`;
-    console.log("[QBO] Using fallback invoice link:", paymentLink);
-  }
+  // Get shareable invoice link (include=invoiceLink, no QBO Payments required)
+  const paymentLink = (await getShareableLink("invoice", invoice.Id))
+    ?? `https://app.qbo.intuit.com/app/invoice?txnId=${invoice.Id}`;
+  console.log("[QBO] Payment link:", paymentLink);
 
   return {
     invoiceId: invoice.Id,
@@ -477,18 +483,10 @@ export async function createEstimate(params: {
   const data = await qboPostWithDocRetry("/estimate", estimateBody);
   const estimate = data.Estimate;
 
-  // Try to get the shareable estimate link
-  let estimateLink: string | null = null;
-  try {
-    const linkData = await qboGet(`/estimate/${estimate.Id}/onlineinvoice`);
-    estimateLink = linkData?.InvoiceLink || null;
-  } catch (_) {
-    console.warn("[QBO] Could not get estimate link");
-  }
-  // Fallback: direct QBO estimate URL (works even without QBO Payments activated)
-  if (!estimateLink) {
-    estimateLink = `https://app.qbo.intuit.com/app/estimate?txnId=${estimate.Id}`;
-  }
+  // Get shareable estimate link (include=invoiceLink, no QBO Payments required)
+  const estimateLink = (await getShareableLink("estimate", estimate.Id))
+    ?? `https://app.qbo.intuit.com/app/estimate?txnId=${estimate.Id}`;
+  console.log("[QBO] Estimate link:", estimateLink);
 
   return {
     estimateId: estimate.Id,
@@ -559,15 +557,10 @@ export async function convertEstimateToInvoice(qboEstimateId: string, customerEm
     console.warn("[QBO] Could not send invoice email after convert");
   }
 
-  // Get payment link
-  let paymentLink: string | null = null;
-  try {
-    const linkData = await qboGet(`/invoice/${invoice.Id}/onlineinvoice`);
-    paymentLink = linkData?.InvoiceLink || null;
-  } catch (_) {}
-  if (!paymentLink) {
-    paymentLink = `https://app.qbo.intuit.com/app/invoice?txnId=${invoice.Id}`;
-  }
+  // Get shareable invoice link
+  const paymentLink = (await getShareableLink("invoice", invoice.Id))
+    ?? `https://app.qbo.intuit.com/app/invoice?txnId=${invoice.Id}`;
+  console.log("[QBO] Converted invoice link:", paymentLink);
 
   return {
     invoiceId: invoice.Id,
