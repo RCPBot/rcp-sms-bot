@@ -1867,7 +1867,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
           qboItemId: item.qboItemId || "",
           name: item.name,
           description: item.description || "",
-          quantity: qty,
+          qty,
           unitPrice: exactPrice,
           amount: Math.round(qty * exactPrice * 100) / 100,
         };
