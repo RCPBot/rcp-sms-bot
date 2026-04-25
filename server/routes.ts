@@ -18,6 +18,71 @@ const TAX_RATE = 0.0825; // McKinney, TX: 8.25% combined sales tax
 
 const orderConfirmationInProgress = new Set<number>();
 
+/**
+ * Post-process the AI's outbound quote message — find any qty × bar-size line items,
+ * compute exact totals server-side from DB prices, and replace whatever
+ * Subtotal/Tax/Total lines the AI wrote with the correct numbers.
+ * This ensures the quote message always matches the invoice.
+ */
+async function fixPriceText(text: string): Promise<string> {
+  // Only act if the message contains subtotal/tax/total lines
+  if (!/subtotal/i.test(text) || !/tax/i.test(text)) return text;
+
+  const products = await storage.getAllProducts();
+
+  // Find all "NNN bars/pcs of #X" patterns in the text
+  const qtyBarRe = /(\d+)\s*(?:x\s+)?(?:bars?|pcs?|pieces?|sticks?)?\s*(?:of\s+)?(?:Rebar\s+)?#(\d+)\s*(?:\([^)]+\))?\s*(20'|20\s*ft|40'|40\s*ft)?/gi;
+  let match: RegExpExecArray | null;
+  let computedSubtotal: number | null = null;
+  let deliveryFee = 0;
+
+  // Extract delivery fee if present in the text
+  const deliveryMatch = text.match(/Delivery:\s*\$(\d[\d,]*\.?\d*)/i);
+  if (deliveryMatch) {
+    deliveryFee = parseFloat(deliveryMatch[1].replace(/,/g, ''));
+  }
+
+  qtyBarRe.lastIndex = 0;
+  let totalFromItems = 0;
+  let foundAny = false;
+  while ((match = qtyBarRe.exec(text)) !== null) {
+    const qty = parseInt(match[1], 10);
+    const size = match[2];
+    const lengthRaw = match[3];
+    const length = lengthRaw && lengthRaw.startsWith('40') ? '40' : '20';
+
+    const product = products.find(p => {
+      if (!p.unitPrice) return false;
+      const name = p.name.toLowerCase();
+      return name.includes(`#${size}`) && name.includes(length);
+    });
+
+    if (product && product.unitPrice) {
+      const unitPrice = parseFloat(String(product.unitPrice));
+      totalFromItems += qty * unitPrice;
+      foundAny = true;
+    }
+  }
+
+  if (!foundAny) return text;
+
+  computedSubtotal = totalFromItems;
+  const computedTax = computedSubtotal * TAX_RATE;
+  const computedTotal = computedSubtotal + computedTax + deliveryFee;
+
+  // Replace Subtotal line
+  text = text.replace(/Subtotal:\s*\$[\d,]+\.\d{2}/gi,
+    `Subtotal: $${computedSubtotal.toFixed(2)}`);
+  // Replace Tax line
+  text = text.replace(/Tax\s*\([^)]+\):\s*\$[\d,]+\.\d{2}/gi,
+    `Tax (8.25%): $${computedTax.toFixed(2)}`);
+  // Replace Total line (not Subtotal)
+  text = text.replace(/(?<!Sub)Total:\s*\$[\d,]+\.\d{2}/gi,
+    `Total: $${computedTotal.toFixed(2)}`);
+
+  return text;
+}
+
 // Best-effort parser for "project name + delivery address" customer replies.
 // Handles:
 //   "Project: Ascension Cottages, 123 Main St, McKinney TX 75071"
@@ -605,7 +670,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
       }
 
       // Save and send the AI reply (skip for lookup_orders — handler sends its own reply)
-      const replyText = intent.text;
+      const replyText = await fixPriceText(intent.text);
       if (replyText && intent.type !== "lookup_orders") {
         await storage.addMessage({
           conversationId: conv.id,
