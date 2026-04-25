@@ -344,15 +344,35 @@ export async function findOrCreateCustomer(params: {
     const isDuplicate = createErr?.message?.includes("6240") || createErr?.message?.includes("Duplicate Name");
     if (isDuplicate) {
       try {
+        let existingCustomer: any = null;
         const encoded = encodeURIComponent(`SELECT * FROM Customer WHERE DisplayName = '${displayName}'`);
         const data = await qboGet(`/query?query=${encoded}`);
         const customers = data.QueryResponse?.Customer || [];
-        if (customers.length > 0) return customers[0].Id;
-        // Also try just the name without company
-        const encodedName = encodeURIComponent(`SELECT * FROM Customer WHERE DisplayName = '${params.name}'`);
-        const data2 = await qboGet(`/query?query=${encodedName}`);
-        const customers2 = data2.QueryResponse?.Customer || [];
-        if (customers2.length > 0) return customers2[0].Id;
+        if (customers.length > 0) existingCustomer = customers[0];
+        if (!existingCustomer) {
+          // Try just the name without company
+          const encodedName = encodeURIComponent(`SELECT * FROM Customer WHERE DisplayName = '${params.name}'`);
+          const data2 = await qboGet(`/query?query=${encodedName}`);
+          const customers2 = data2.QueryResponse?.Customer || [];
+          if (customers2.length > 0) existingCustomer = customers2[0];
+        }
+        if (existingCustomer) {
+          // If the existing customer has no email, update it so invoicing works
+          const hasEmail = existingCustomer.PrimaryEmailAddr?.Address;
+          if (!hasEmail && params.email) {
+            try {
+              await qboPost("/customer", {
+                Id: existingCustomer.Id,
+                SyncToken: existingCustomer.SyncToken,
+                sparse: true,
+                PrimaryEmailAddr: { Address: params.email },
+              });
+            } catch (updateErr) {
+              console.warn("[QBO] Could not update customer email:", updateErr);
+            }
+          }
+          return existingCustomer.Id;
+        }
       } catch (_) {}
     }
     throw createErr;
