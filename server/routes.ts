@@ -1827,4 +1827,93 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       res.status(500).send(`<h2>Callback Error</h2><pre>${err.message}</pre><p>Check Railway logs for QBO_REALM_ID and QBO_REFRESH_TOKEN values.</p>`);
     }
   });
+
+  // ── WEB CHAT ORDER ───────────────────────────────────────────────────────────────────
+  // Creates a QBO customer + invoice from a structured web chat order
+  // Called by the EstimatingBot website after customer confirms their order in chat
+  // Body: { customerName, customerEmail, customerPhone, customerCompany, deliveryAddress, items: [{name, qboItemId, qty, unitPrice}] }
+  app.post("/api/web-order", express.json(), async (req, res) => {
+    try {
+      const { customerName, customerEmail, customerPhone, customerCompany, deliveryAddress, items } = req.body;
+
+      if (!customerName || !customerEmail || !Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ error: "customerName, customerEmail, and items are required" });
+      }
+
+      // Find or create QBO customer
+      const customerId = await findOrCreateCustomer({
+        name: customerName,
+        email: customerEmail,
+        phone: customerPhone || "",
+        company: customerCompany || "",
+      });
+
+      // Build line items with exact DB prices
+      const products = await getQboItems();
+      const lineItems: LineItem[] = items.map((item: any) => {
+        // Look up exact unit price from QBO if item has a qboItemId
+        const product = item.qboItemId
+          ? products.find((p: any) => p.id === item.qboItemId)
+          : null;
+        const exactPrice = product ? product.unitPrice : item.unitPrice;
+        const qty = Number(item.qty);
+        return {
+          qboItemId: item.qboItemId || "",
+          name: item.name,
+          description: item.description || "",
+          quantity: qty,
+          unitPrice: exactPrice,
+          amount: Math.round(qty * exactPrice * 100) / 100,
+        };
+      });
+
+      const subtotal = lineItems.reduce((s, l) => s + l.amount, 0);
+      const deliveryFee = deliveryAddress ? calcDeliveryFee(deliveryAddress) : 0;
+      const preTax = subtotal + deliveryFee;
+      const tax = Math.round(preTax * TAX_RATE * 100) / 100;
+      const total = Math.round((preTax + tax) * 100) / 100;
+
+      const { invoiceId, invoiceNumber, paymentLink } = await createInvoice({
+        customerId,
+        lineItems,
+        deliveryFee,
+        tax,
+        total,
+        deliveryAddress: deliveryAddress || "",
+        projectAddress: "",
+        memo: `Web order via ai.rebarconcreteproducts.com`,
+      });
+
+      // Email invoice link to customer
+      if (customerEmail) {
+        try {
+          await sendPaymentLinkEmail({
+            to: customerEmail,
+            customerName,
+            invoiceNumber,
+            total,
+            paymentLink,
+          });
+        } catch (emailErr) {
+          console.warn("[WEB-ORDER] Email send failed:", emailErr);
+        }
+      }
+
+      console.log(`[WEB-ORDER] Invoice #${invoiceNumber} created for ${customerName} via web chat — $${total}`);
+
+      res.json({
+        success: true,
+        invoiceNumber,
+        invoiceId,
+        paymentLink,
+        subtotal,
+        tax,
+        total,
+        deliveryFee,
+      });
+    } catch (err: any) {
+      console.error("[WEB-ORDER ERROR]", err);
+      res.status(500).json({ error: err.message || "Failed to create order" });
+    }
+  });
 }
