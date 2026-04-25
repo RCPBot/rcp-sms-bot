@@ -16,12 +16,37 @@
   <body>
     <div id="root"></div>
   <script>
-    // postMessage listener — allows parent page chips to inject prompts
+    // ── Prevent this iframe from scrolling the parent page ──
+    // Override focus() on all elements to prevent scroll-into-view
+    (function() {
+      var origFocus = HTMLElement.prototype.focus;
+      HTMLElement.prototype.focus = function(opts) {
+        origFocus.call(this, { preventScroll: true });
+      };
+
+      // Also block scrollIntoView from propagating scroll up to parent
+      var origScrollIntoView = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = function(opts) {
+        // Only scroll within this document, not the parent
+        origScrollIntoView.call(this, opts);
+        // Tell parent to stay put
+        try { window.parent.postMessage({ type: 'rcp-no-scroll' }, '*'); } catch(e) {}
+      };
+
+      // Prevent the page from jumping when textarea auto-focuses
+      document.addEventListener('focus', function(e) {
+        if (e.target && (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT')) {
+          var x = window.scrollX, y = window.scrollY;
+          setTimeout(function() { window.scrollTo(x, y); }, 0);
+        }
+      }, true);
+    })();
+
+    // ── postMessage listener — allows parent page chips to inject prompts ──
     window.addEventListener('message', function(e) {
       if (!e.data || e.data.type !== 'rcp-prompt') return;
       var prompt = e.data.text;
       if (!prompt) return;
-      // Try to find the textarea and inject the text
       function tryInject(attempts) {
         var ta = document.querySelector('textarea');
         if (!ta && attempts > 0) {
@@ -29,16 +54,12 @@
           return;
         }
         if (!ta) return;
-        // Set the value via React's internal setter so state updates
         var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
         nativeInputValueSetter.call(ta, prompt);
         ta.dispatchEvent(new Event('input', { bubbles: true }));
-        ta.focus();
-        // Submit after a short delay
+        ta.focus({ preventScroll: true });
         setTimeout(function() {
-          // Try pressing Enter
           ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
-          // Also try clicking a submit button if Enter doesn't work
           setTimeout(function() {
             var btn = document.querySelector('button[type="submit"], form button:not([type="button"])');
             if (btn) btn.click();
