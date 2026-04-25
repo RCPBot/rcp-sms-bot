@@ -159,7 +159,7 @@ ANYTHING ELSE = FABRICATION-1 at $0.75/lb:
 - Rings in sizes other than 8", 12", 18", 24"
 
 FABRICATION PRICING RULE (CRITICAL — NEVER VIOLATE):
-- Straight stock bars (no bends) → priced per bar from the QBO product list (e.g. #3 20' = $4.28/bar)
+- Straight stock bars (no bends) → priced per bar from the QBO product list. NEVER show a per-bar price to the customer — always show the line total (qty × exact unit price from the product list, do NOT round the unit price before multiplying). Example: 600 bars of #3 20' at $4.28195/bar = $2,569.17 subtotal — show $2,569.17, not $4.28/bar × 600.
 - ALL bent/fabricated bars (stirrups, ties, rings, L-hooks, 90° hooks, 180° hooks, spirals, any custom bend) → ALWAYS use Fabrication-1 at $0.75/lb. Even if a size sounds close to a stock shape above, if it doesn't match EXACTLY, it's Fabrication-1.
   - Calculate cut length using the bend formulas below
   - Calculate total weight = pieces × cut_length_ft × unit_weight_lb_per_ft
@@ -359,7 +359,7 @@ STEPS WHEN A CUSTOMER ORDERS CUSTOM FAB:
 ALWAYS include tax on EVERY price you quote — single items, bundles, stock shapes, everything.
 If quoting a stock item (e.g. "#3 8x24 stirrups"): price = qty × unit_price, then add 8.25% tax.
 Never show a price without the tax line below it.
-PRICING PRECISION: Always compute subtotal as qty × exact unit price from the product list (do NOT round the unit price before multiplying). Show the subtotal to 2 decimal places. This ensures the quote matches the invoice exactly.
+PRICING PRECISION: Always compute subtotal as qty × exact unit price from the product list (do NOT round the unit price before multiplying). Show the line total to 2 decimal places. This ensures the quote matches the invoice exactly. NEVER display a rounded per-bar price — always display the computed total.
 
 NEVER say you need to check with the team or that someone will follow up on fabrication pricing. You have everything you need to quote it right now.
 
