@@ -2032,19 +2032,37 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
           return;
         }
         if (!ta) return;
+        // Set value via React's native setter so state updates
         var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
         nativeInputValueSetter.call(ta, prompt);
         ta.dispatchEvent(new Event('input', { bubbles: true }));
+        ta.dispatchEvent(new Event('change', { bubbles: true }));
         ta.focus({ preventScroll: true });
+        // Submit via Enter key — the chat app listens for keydown Enter on the textarea
         setTimeout(function() {
-          ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
+          ta.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'Enter', code: 'Enter', keyCode: 13,
+            which: 13, bubbles: true, cancelable: true
+          }));
+          ta.dispatchEvent(new KeyboardEvent('keypress', {
+            key: 'Enter', code: 'Enter', keyCode: 13,
+            which: 13, bubbles: true, cancelable: true
+          }));
+          ta.dispatchEvent(new KeyboardEvent('keyup', {
+            key: 'Enter', code: 'Enter', keyCode: 13,
+            which: 13, bubbles: true, cancelable: true
+          }));
+          // Fallback: also try clicking the last button (send button)
           setTimeout(function() {
-            var btn = document.querySelector('button[type="submit"], form button:not([type="button"])');
-            if (btn) btn.click();
-          }, 100);
-        }, 150);
+            if (ta.value && ta.value.trim()) {
+              var btns = document.querySelectorAll('button');
+              var lastBtn = btns[btns.length - 1];
+              if (lastBtn) lastBtn.click();
+            }
+          }, 200);
+        }, 300);
       }
-      tryInject(15);
+      tryInject(20);
     });
   <\/script>`;
 
