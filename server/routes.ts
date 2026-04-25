@@ -1991,4 +1991,76 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       res.status(500).json({ error: err.message || "Distance lookup failed" });
     }
   });
+
+  // ── /chat — proxy for ai.rebarconcreteproducts.com with postMessage listener injected ──
+  // Fetches the estimatingbot HTML and injects our chip→chatbot postMessage script
+  // so the Shopify homepage chips can inject prompts cross-origin.
+  app.get("/chat", async (_req, res) => {
+    try {
+      const upstream = await fetch("https://ai.rebarconcreteproducts.com");
+      let html = await upstream.text();
+
+      const LISTENER_SCRIPT = `<script>
+    // ── Prevent this iframe from scrolling the parent page ──
+    (function() {
+      var origFocus = HTMLElement.prototype.focus;
+      HTMLElement.prototype.focus = function(opts) {
+        origFocus.call(this, { preventScroll: true });
+      };
+      var origScrollIntoView = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = function(opts) {
+        origScrollIntoView.call(this, opts);
+        try { window.parent.postMessage({ type: 'rcp-no-scroll' }, '*'); } catch(e) {}
+      };
+      document.addEventListener('focus', function(e) {
+        if (e.target && (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT')) {
+          var x = window.scrollX, y = window.scrollY;
+          setTimeout(function() { window.scrollTo(x, y); }, 0);
+        }
+      }, true);
+    })();
+
+    // ── postMessage listener — allows parent page chips to inject prompts ──
+    window.addEventListener('message', function(e) {
+      if (!e.data || e.data.type !== 'rcp-prompt') return;
+      var prompt = e.data.text;
+      if (!prompt) return;
+      function tryInject(attempts) {
+        var ta = document.querySelector('textarea');
+        if (!ta && attempts > 0) {
+          setTimeout(function(){ tryInject(attempts - 1); }, 200);
+          return;
+        }
+        if (!ta) return;
+        var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+        nativeInputValueSetter.call(ta, prompt);
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+        ta.focus({ preventScroll: true });
+        setTimeout(function() {
+          ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
+          setTimeout(function() {
+            var btn = document.querySelector('button[type="submit"], form button:not([type="button"])');
+            if (btn) btn.click();
+          }, 100);
+        }, 150);
+      }
+      tryInject(15);
+    });
+  <\/script>`;
+
+      // Rewrite relative asset URLs to absolute (so assets still load from the upstream)
+      html = html.replace(/(src|href)="\.\/assets\//g, '$1="https://ai.rebarconcreteproducts.com/assets/');
+      html = html.replace(/(src|href)="\.\/([^"]+)"/g, '$1="https://ai.rebarconcreteproducts.com/$2"');
+
+      // Inject our listener script just before </body>
+      html = html.replace('</body>', LISTENER_SCRIPT + '\n</body>');
+
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('X-Frame-Options', 'ALLOWALL');
+      res.setHeader('Content-Security-Policy', '');
+      res.send(html);
+    } catch (err: any) {
+      res.status(502).send('Chat unavailable: ' + err.message);
+    }
+  });
 }
