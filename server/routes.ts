@@ -1885,7 +1885,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
 
       const subtotal = lineItems.reduce((s, l) => s + l.amount, 0);
 
-      // Tiered free delivery
+      // Tiered free delivery — look up real distance via Google Maps
       const FREE_DELIVERY_TIERS_WEB = [
         { miles: 65, minOrder: 8000 },
         { miles: 55, minOrder: 4000 },
@@ -1894,14 +1894,21 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       ];
       let deliveryFee = 0;
       let deliveryMilesWeb: number | undefined;
-      if (deliveryAddress) {
-        const dist = await calcDeliveryFee(deliveryAddress);
+      if (deliveryAddress && deliveryAddress.trim()) {
+        console.log(`[WEB-ORDER] Calculating delivery fee for: "${deliveryAddress}"`);
+        const dist = await calcDeliveryFee(deliveryAddress).catch(e => {
+          console.error("[WEB-ORDER] calcDeliveryFee error:", e);
+          return null;
+        });
         if (dist) {
           deliveryMilesWeb = dist.miles;
           const qualifies = FREE_DELIVERY_TIERS_WEB.some(
             t => dist.miles <= t.miles && subtotal >= t.minOrder
           );
           deliveryFee = qualifies ? 0 : dist.fee;
+          console.log(`[WEB-ORDER] Distance: ${dist.miles} mi, fee: $${deliveryFee}, subtotal: $${subtotal}, qualifiesFree: ${qualifies}`);
+        } else {
+          console.warn(`[WEB-ORDER] Could not calculate delivery distance — fee set to 0`);
         }
       }
 
@@ -1913,7 +1920,8 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
         customerId,
         customerEmail,
         lineItems,
-        deliveryFee,
+        deliveryFee: deliveryFee > 0 ? deliveryFee : undefined,
+        deliveryMiles: deliveryMilesWeb,
         deliveryAddress: deliveryAddress || "",
         deliveryNotes: deliveryNotes || undefined,
         customerMemo: `Web order via ai.rebarconcreteproducts.com`,
