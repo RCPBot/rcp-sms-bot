@@ -11,7 +11,11 @@ import {
   type ConversationWithMessages,
 } from "@shared/schema";
 
-const sqlite = new Database("data.db");
+// Use persistent volume path if available (Railway), otherwise fall back to local
+const DB_PATH = process.env.RAILWAY_VOLUME_MOUNT_PATH
+  ? `${process.env.RAILWAY_VOLUME_MOUNT_PATH}/data.db`
+  : "data.db";
+const sqlite = new Database(DB_PATH);
 export const db = drizzle(sqlite);
 
 // ── Migrations (create tables) ────────────────────────────────────────────────
