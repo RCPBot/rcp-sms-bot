@@ -1834,7 +1834,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
   // Body: { customerName, customerEmail, customerPhone, customerCompany, deliveryAddress, items: [{name, qboItemId, qty, unitPrice}] }
   app.post("/api/web-order", express.json(), async (req, res) => {
     try {
-      const { customerName, customerEmail, customerPhone, customerCompany, deliveryAddress, items } = req.body;
+      const { customerName, customerEmail, customerPhone, customerCompany, deliveryAddress, deliveryNotes, items } = req.body;
 
       if (!customerName || !customerPhone || !Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ error: "customerName, customerPhone, and items are required" });
@@ -1885,6 +1885,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
         lineItems,
         deliveryFee,
         deliveryAddress: deliveryAddress || "",
+        deliveryNotes: deliveryNotes || undefined,
         customerMemo: `Web order via ai.rebarconcreteproducts.com`,
       });
 
