@@ -310,6 +310,45 @@ export async function calcDeliveryFee(destinationAddress: string): Promise<{
   }
 }
 
+// ── Find existing QBO customer only (no create) ─────────────────────────────
+// Used for web orders — only existing customers can invoice to prevent fraud.
+export async function findExistingCustomer(params: {
+  name: string;
+  email: string;
+}): Promise<string | null> {
+  // Search by email first
+  try {
+    const encoded = encodeURIComponent(`SELECT * FROM Customer WHERE PrimaryEmailAddr = '${params.email}'`);
+    const data = await qboGet(`/query?query=${encoded}`);
+    const customers = data.QueryResponse?.Customer || [];
+    if (customers.length > 0) return customers[0].Id;
+  } catch (_) {}
+
+  // Fall back to display name match
+  try {
+    const encoded = encodeURIComponent(`SELECT * FROM Customer WHERE DisplayName = '${params.name}'`);
+    const data = await qboGet(`/query?query=${encoded}`);
+    const customers = data.QueryResponse?.Customer || [];
+    if (customers.length > 0) {
+      const customer = customers[0];
+      // Update their QBO record with email if missing
+      if (!customer.PrimaryEmailAddr?.Address && params.email) {
+        try {
+          await qboPost("/customer", {
+            Id: customer.Id,
+            SyncToken: customer.SyncToken,
+            sparse: true,
+            PrimaryEmailAddr: { Address: params.email },
+          });
+        } catch (_) {}
+      }
+      return customer.Id;
+    }
+  } catch (_) {}
+
+  return null; // Not found — do not create
+}
+
 // ── Find or create a QBO customer ────────────────────────────────────────────
 export async function findOrCreateCustomer(params: {
   name: string;

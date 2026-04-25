@@ -4,7 +4,7 @@ import express from "express";
 import { storage } from "./storage";
 import { sendSms, isTwilioConfigured, sendPaymentLinkEmail } from "./sms";
 import { processMessage, extractOrderFromConversation, extractCustomerInfo, isAiConfigured } from "./ai";
-import { syncProducts, findOrCreateCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice, updateRailwayEnvVar, setLiveRefreshToken, getOrCreateBotCustomer, getQboItems } from "./qbo";
+import { syncProducts, findOrCreateCustomer, findExistingCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice, updateRailwayEnvVar, setLiveRefreshToken, getOrCreateBotCustomer, getQboItems } from "./qbo";
 import { performTakeoff } from "./takeoff";
 import { resolveLinksFromText, extractUrls } from "./link-resolver";
 import { generateCutSheetPdf, emailCutSheet, emailCutSheetToCustomer, generatePlacementDrawingPdf, forwardPlansToOffice, generateBidPdf, emailBidPdf, OFFICE_EMAIL } from "./cutsheet";
@@ -1840,13 +1840,18 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
         return res.status(400).json({ error: "customerName, customerEmail, and items are required" });
       }
 
-      // Find or create QBO customer
-      const customerId = await findOrCreateCustomer({
+      // Look up existing QBO customer only — no new customers created via web (fraud prevention)
+      const customerId = await findExistingCustomer({
         name: customerName,
         email: customerEmail,
-        phone: customerPhone || "",
-        company: customerCompany || "",
       });
+
+      if (!customerId) {
+        return res.status(403).json({
+          error: "customer_not_found",
+          message: `We don't have an account on file for "${customerName}". To place an order online, you'll need an account with us first. Please call us at 469-631-7730 or stop by 2112 N Custer Rd, McKinney, TX 75071 to get set up.`,
+        });
+      }
 
       // Build line items with exact DB prices
       const products = await getQboItems();
