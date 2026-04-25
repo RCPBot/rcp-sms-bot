@@ -15,5 +15,38 @@
   </head>
   <body>
     <div id="root"></div>
+  <script>
+    // postMessage listener — allows parent page chips to inject prompts
+    window.addEventListener('message', function(e) {
+      if (!e.data || e.data.type !== 'rcp-prompt') return;
+      var prompt = e.data.text;
+      if (!prompt) return;
+      // Try to find the textarea and inject the text
+      function tryInject(attempts) {
+        var ta = document.querySelector('textarea');
+        if (!ta && attempts > 0) {
+          setTimeout(function(){ tryInject(attempts - 1); }, 200);
+          return;
+        }
+        if (!ta) return;
+        // Set the value via React's internal setter so state updates
+        var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+        nativeInputValueSetter.call(ta, prompt);
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+        ta.focus();
+        // Submit after a short delay
+        setTimeout(function() {
+          // Try pressing Enter
+          ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
+          // Also try clicking a submit button if Enter doesn't work
+          setTimeout(function() {
+            var btn = document.querySelector('button[type="submit"], form button:not([type="button"])');
+            if (btn) btn.click();
+          }, 100);
+        }, 150);
+      }
+      tryInject(15);
+    });
+  </script>
   </body>
 </html>
