@@ -325,9 +325,10 @@ export async function findOrCreateCustomer(params: {
     if (customers.length > 0) return customers[0].Id;
   } catch (_) {}
 
-  // Create new customer
+  // Try to create new customer
+  const displayName = params.company ? `${params.name} - ${params.company}` : params.name;
   const body: Record<string, any> = {
-    DisplayName: params.company ? `${params.name} - ${params.company}` : params.name,
+    DisplayName: displayName,
     GivenName: params.name.split(" ")[0],
     FamilyName: params.name.split(" ").slice(1).join(" ") || "",
     PrimaryEmailAddr: { Address: params.email },
@@ -335,8 +336,27 @@ export async function findOrCreateCustomer(params: {
   };
   if (params.company) body.CompanyName = params.company;
 
-  const data = await qboPost("/customer", body);
-  return data.Customer.Id;
+  try {
+    const data = await qboPost("/customer", body);
+    return data.Customer.Id;
+  } catch (createErr: any) {
+    // If duplicate name error, fall back to searching by display name
+    const isDuplicate = createErr?.message?.includes("6240") || createErr?.message?.includes("Duplicate Name");
+    if (isDuplicate) {
+      try {
+        const encoded = encodeURIComponent(`SELECT * FROM Customer WHERE DisplayName = '${displayName}'`);
+        const data = await qboGet(`/query?query=${encoded}`);
+        const customers = data.QueryResponse?.Customer || [];
+        if (customers.length > 0) return customers[0].Id;
+        // Also try just the name without company
+        const encodedName = encodeURIComponent(`SELECT * FROM Customer WHERE DisplayName = '${params.name}'`);
+        const data2 = await qboGet(`/query?query=${encodedName}`);
+        const customers2 = data2.QueryResponse?.Customer || [];
+        if (customers2.length > 0) return customers2[0].Id;
+      } catch (_) {}
+    }
+    throw createErr;
+  }
 }
 
 // ── Get or create the "BOT" customer in QBO ─────────────────────────────────
