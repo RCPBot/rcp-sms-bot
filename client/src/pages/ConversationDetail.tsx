@@ -1,7 +1,7 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useParams, useLocation } from "wouter";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { ArrowLeft, Send, Phone, Mail, Building, MapPin, FileText, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -19,6 +19,11 @@ export default function ConversationDetail() {
   const [, navigate] = useLocation();
   const [reply, setReply] = useState("");
   const { toast } = useToast();
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "instant" });
+  }, [conv?.messages?.length]);
 
   const { data: conv, isLoading } = useQuery({
     queryKey: ["/api/conversations", id],
@@ -79,7 +84,7 @@ export default function ConversationDetail() {
         </div>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-3">
+        <div className="flex-1 overflow-y-auto p-6 space-y-3" id="msg-scroll">
           {(conv.messages || []).map((msg: Message) => (
             <div
               key={msg.id}
@@ -100,6 +105,7 @@ export default function ConversationDetail() {
               </div>
             </div>
           ))}
+          <div ref={bottomRef} />
         </div>
 
         {/* Reply box */}
