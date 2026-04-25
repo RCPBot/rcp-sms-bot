@@ -37,7 +37,7 @@ async function callWithRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T
 function buildSystemPrompt(products: Product[], conv: Conversation): string {
   const productList = products.length > 0
     ? products.map(p =>
-        `- ${p.name}${p.description ? ": " + p.description : ""}${p.unitPrice ? " — $" + p.unitPrice.toFixed(2) + (p.unitOfMeasure ? "/" + p.unitOfMeasure : "") : " (price varies)"}`
+        `- ${p.name}${p.description ? ": " + p.description : ""}${p.unitPrice ? " — $" + p.unitPrice + (p.unitOfMeasure ? "/" + p.unitOfMeasure : "") : " (price varies)"}`
       ).join("\n")
     : "- Products are loading from QuickBooks. Tell the customer you'll have pricing shortly.";
 
@@ -359,6 +359,7 @@ STEPS WHEN A CUSTOMER ORDERS CUSTOM FAB:
 ALWAYS include tax on EVERY price you quote — single items, bundles, stock shapes, everything.
 If quoting a stock item (e.g. "#3 8x24 stirrups"): price = qty × unit_price, then add 8.25% tax.
 Never show a price without the tax line below it.
+PRICING PRECISION: Always compute subtotal as qty × exact unit price from the product list (do NOT round the unit price before multiplying). Show the subtotal to 2 decimal places. This ensures the quote matches the invoice exactly.
 
 NEVER say you need to check with the team or that someone will follow up on fabrication pricing. You have everything you need to quote it right now.
 
