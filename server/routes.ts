@@ -1844,7 +1844,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
   // Body: { customerName, customerEmail, customerPhone, customerCompany, deliveryAddress, items: [{name, qboItemId, qty, unitPrice}] }
   app.post("/api/web-order", express.json(), async (req, res) => {
     try {
-      const { customerName, customerEmail, customerPhone, customerCompany, deliveryAddress, deliveryNotes, items } = req.body;
+      const { customerName, customerEmail, customerPhone, customerCompany, deliveryAddress, deliveryNotes, deliveryMilesFallback, deliveryFeeFallback, items } = req.body;
 
       if (!customerName || !customerPhone || !Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ error: "customerName, customerPhone, and items are required" });
@@ -1907,6 +1907,11 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
           );
           deliveryFee = qualifies ? 0 : dist.fee;
           console.log(`[WEB-ORDER] Distance: ${dist.miles} mi, fee: $${deliveryFee}, subtotal: $${subtotal}, qualifiesFree: ${qualifies}`);
+        } else if (deliveryFeeFallback && deliveryFeeFallback > 0) {
+          // Maps lookup failed — use the fee the client already calculated via /api/calc-delivery
+          deliveryMilesWeb = deliveryMilesFallback;
+          deliveryFee = deliveryFeeFallback;
+          console.log(`[WEB-ORDER] Using client fallback: ${deliveryMilesWeb} mi, fee: $${deliveryFee}`);
         } else {
           console.warn(`[WEB-ORDER] Could not calculate delivery distance — fee set to 0`);
         }
