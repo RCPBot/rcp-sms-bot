@@ -1,10 +1,10 @@
-import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
+import { pgTable, text, integer, real, boolean, serial, timestamp } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
 // ── Conversations ─────────────────────────────────────────────────────────────
-export const conversations = sqliteTable("conversations", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const conversations = pgTable("conversations", {
+  id: serial("id").primaryKey(),
   phone: text("phone").notNull(),
   customerName: text("customer_name"),
   customerEmail: text("customer_email"),
@@ -13,67 +13,73 @@ export const conversations = sqliteTable("conversations", {
   projectName: text("project_name"),
   projectAddress: text("project_address"),
   qboCustomerId: text("qbo_customer_id"),
-  verified: integer("verified", { mode: "boolean" }).notNull().default(false), // true = confirmed existing QBO customer
+  verified: boolean("verified").notNull().default(false),
   status: text("status").notNull().default("active"), // active | completed | abandoned
   stage: text("stage").notNull().default("greeting"), // greeting | collecting_info | ordering | confirming | invoiced | paid
-  pendingImagesJson: text("pending_images_json"), // JSON array of image data URLs waiting for takeoff
-  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
-  updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+  pendingImagesJson: text("pending_images_json"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });
 
 // ── Messages ──────────────────────────────────────────────────────────────────
-export const messages = sqliteTable("messages", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const messages = pgTable("messages", {
+  id: serial("id").primaryKey(),
   conversationId: integer("conversation_id").notNull().references(() => conversations.id),
   direction: text("direction").notNull(), // inbound | outbound
   body: text("body").notNull(),
-  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 // ── Orders ────────────────────────────────────────────────────────────────────
-export const orders = sqliteTable("orders", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const orders = pgTable("orders", {
+  id: serial("id").primaryKey(),
   conversationId: integer("conversation_id").notNull().references(() => conversations.id),
   qboInvoiceId: text("qbo_invoice_id"),
   qboInvoiceNumber: text("qbo_invoice_number"),
   paymentLink: text("payment_link"),
-  lineItemsJson: text("line_items_json").notNull(), // JSON array of {name, qty, unitPrice, amount}
+  lineItemsJson: text("line_items_json").notNull(),
   subtotal: real("subtotal").notNull().default(0),
   deliveryFee: real("delivery_fee").notNull().default(0),
   deliveryMiles: real("delivery_miles"),
   total: real("total").notNull().default(0),
-  deliveryType: text("delivery_type").notNull().default("pickup"), // pickup | delivery
-  status: text("status").notNull().default("pending"), // pending | invoiced | paid | cancelled
-  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+  deliveryType: text("delivery_type").notNull().default("pickup"),
+  status: text("status").notNull().default("pending"),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
-// ── Estimates (Plan Takeoff → QBO Estimate) ────────────────────────────────
-export const estimates = sqliteTable("estimates", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+// ── Estimates ─────────────────────────────────────────────────────────────────
+export const estimates = pgTable("estimates", {
+  id: serial("id").primaryKey(),
   conversationId: integer("conversation_id").notNull().references(() => conversations.id),
   qboEstimateId: text("qbo_estimate_id"),
   qboEstimateNumber: text("qbo_estimate_number"),
   qboEstimateLink: text("qbo_estimate_link"),
-  lineItemsJson: text("line_items_json").notNull(),       // full takeoff line items
-  fabricationJson: text("fabrication_json"),               // cut sheet details for fab items
-  planPagesJson: text("plan_pages_json"),                  // image URLs of plan pages submitted
-  takeoffNotesJson: text("takeoff_notes_json"),            // AI takeoff notes per page
+  lineItemsJson: text("line_items_json").notNull(),
+  fabricationJson: text("fabrication_json"),
+  planPagesJson: text("plan_pages_json"),
+  takeoffNotesJson: text("takeoff_notes_json"),
   subtotal: real("subtotal").notNull().default(0),
-  status: text("status").notNull().default("pending"),    // pending | sent | approved | declined
-  cutSheetEmailedAt: integer("cut_sheet_emailed_at", { mode: "timestamp" }),
-  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+  status: text("status").notNull().default("pending"),
+  cutSheetEmailedAt: timestamp("cut_sheet_emailed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 // ── QBO Products Cache ────────────────────────────────────────────────────────
-export const products = sqliteTable("products", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const products = pgTable("products", {
+  id: serial("id").primaryKey(),
   qboItemId: text("qbo_item_id").notNull().unique(),
   name: text("name").notNull(),
   description: text("description"),
   unitPrice: real("unit_price"),
   unitOfMeasure: text("unit_of_measure"),
-  active: integer("active", { mode: "boolean" }).notNull().default(true),
-  syncedAt: integer("synced_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+  active: boolean("active").notNull().default(true),
+  syncedAt: timestamp("synced_at").defaultNow(),
+});
+
+// ── Settings (key-value) ──────────────────────────────────────────────────────
+export const settings = pgTable("settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
 });
 
 // ── Insert Schemas ────────────────────────────────────────────────────────────
@@ -98,23 +104,23 @@ export type InsertEstimate = z.infer<typeof insertEstimateSchema>;
 export type LineItem = {
   qboItemId: string;
   name: string;
-  description?: string;  // Line-level description shown in QBO invoice/estimate
+  description?: string;
   qty: number;
   unitPrice: number;
   amount: number;
 };
 
 export type FabItem = {
-  mark: string;         // bar mark e.g. "B1"
-  barSize: string;      // e.g. "#4"
-  qty: number;          // number of pieces
-  lengthFt: number;     // cut length in feet
-  totalLF: number;      // qty * lengthFt
-  weightLbs: number;    // total weight
-  bendDescription: string; // e.g. "90-deg hook, 6" leg" or "Straight"
-  stockLengthFt: number;   // stock bar length used (default 20)
-  barsPerStock: number;    // how many pieces per stock bar
-  stockBarsNeeded: number; // number of stock bars to order
+  mark: string;
+  barSize: string;
+  qty: number;
+  lengthFt: number;
+  totalLF: number;
+  weightLbs: number;
+  bendDescription: string;
+  stockLengthFt: number;
+  barsPerStock: number;
+  stockBarsNeeded: number;
 };
 
 export type ConversationWithMessages = Conversation & {

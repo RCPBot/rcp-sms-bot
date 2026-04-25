@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "NODE_ENV=development tsx server/index.ts",
-    "build": "node vite.build.mjs && esbuild server/index.ts --platform=node --bundle --format=cjs --outfile=dist/index.cjs --external:better-sqlite3 --external:drizzle-kit --external:vite --external:tsx --external:typescript --external:esbuild --external:@vitejs/plugin-react --external:tailwindcss --external:postcss --external:autoprefixer --external:drizzle-orm/better-sqlite3 --external:pdfkit --minify",
+    "build": "node vite.build.mjs && esbuild server/index.ts --platform=node --bundle --format=cjs --outfile=dist/index.cjs --external:pg --external:pg-native --external:drizzle-kit --external:vite --external:tsx --external:typescript --external:esbuild --external:@vitejs/plugin-react --external:tailwindcss --external:postcss --external:autoprefixer --external:drizzle-orm/node-postgres --external:pdfkit --minify",
     "start": "NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
     "db:push": "drizzle-kit push"
@@ -45,7 +45,6 @@
     "@tanstack/react-query": "^5.60.5",
     "@types/nodemailer": "^8.0.0",
     "@types/pdfkit": "^0.17.6",
-    "better-sqlite3": "^11.7.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
@@ -69,6 +68,7 @@
     "passport-local": "^1.0.0",
     "pdf-lib": "^1.17.1",
     "pdfkit": "^0.18.0",
+    "pg": "^8.20.0",
     "react": "^18.3.1",
     "react-day-picker": "^8.10.1",
     "react-dom": "^18.3.1",
@@ -90,12 +90,12 @@
   "devDependencies": {
     "@tailwindcss/typography": "^0.5.15",
     "@tailwindcss/vite": "^4.1.18",
-    "@types/better-sqlite3": "^7.6.12",
     "@types/express": "^5.0.0",
     "@types/express-session": "^1.18.0",
     "@types/node": "20.19.27",
     "@types/passport": "^1.0.16",
     "@types/passport-local": "^1.0.38",
+    "@types/pg": "^8.20.0",
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.1",
     "@types/ws": "^8.5.13",

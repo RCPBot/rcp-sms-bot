@@ -1,8 +1,8 @@
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { Pool } from "pg";
 import { eq, desc, and } from "drizzle-orm";
 import {
-  conversations, messages, orders, products, estimates,
+  conversations, messages, orders, products, estimates, settings,
   type Conversation, type InsertConversation,
   type Message, type InsertMessage,
   type Order, type InsertOrder,
@@ -11,277 +11,293 @@ import {
   type ConversationWithMessages,
 } from "@shared/schema";
 
-// Use persistent volume path if available (Railway), otherwise fall back to local
-const DB_PATH = process.env.RAILWAY_VOLUME_MOUNT_PATH
-  ? `${process.env.RAILWAY_VOLUME_MOUNT_PATH}/data.db`
-  : "data.db";
-const sqlite = new Database(DB_PATH);
-export const db = drizzle(sqlite);
+// ── Database connection ───────────────────────────────────────────────────────
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL?.includes("railway") ? { rejectUnauthorized: false } : false,
+});
+export const db = drizzle(pool);
 
-// ── Migrations (create tables) ────────────────────────────────────────────────
-sqlite.exec(`
-  CREATE TABLE IF NOT EXISTS conversations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    phone TEXT NOT NULL,
-    customer_name TEXT,
-    customer_email TEXT,
-    customer_company TEXT,
-    delivery_address TEXT,
-    qbo_customer_id TEXT,
-    verified INTEGER NOT NULL DEFAULT 0,
-    status TEXT NOT NULL DEFAULT 'active',
-    stage TEXT NOT NULL DEFAULT 'greeting',
-    pending_images_json TEXT,
-    created_at INTEGER,
-    updated_at INTEGER
-  );
-  CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    conversation_id INTEGER NOT NULL REFERENCES conversations(id),
-    direction TEXT NOT NULL,
-    body TEXT NOT NULL,
-    created_at INTEGER
-  );
-  CREATE TABLE IF NOT EXISTS orders (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    conversation_id INTEGER NOT NULL REFERENCES conversations(id),
-    qbo_invoice_id TEXT,
-    qbo_invoice_number TEXT,
-    payment_link TEXT,
-    line_items_json TEXT NOT NULL,
-    subtotal REAL NOT NULL DEFAULT 0,
-    delivery_fee REAL NOT NULL DEFAULT 0,
-    delivery_miles REAL,
-    total REAL NOT NULL DEFAULT 0,
-    delivery_type TEXT NOT NULL DEFAULT 'pickup',
-    status TEXT NOT NULL DEFAULT 'pending',
-    created_at INTEGER
-  );
-  CREATE TABLE IF NOT EXISTS products (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    qbo_item_id TEXT NOT NULL UNIQUE,
-    name TEXT NOT NULL,
-    description TEXT,
-    unit_price REAL,
-    unit_of_measure TEXT,
-    active INTEGER NOT NULL DEFAULT 1,
-    synced_at INTEGER
-  );
-  CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS estimates (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    conversation_id INTEGER NOT NULL REFERENCES conversations(id),
-    qbo_estimate_id TEXT,
-    qbo_estimate_number TEXT,
-    qbo_estimate_link TEXT,
-    line_items_json TEXT NOT NULL,
-    fabrication_json TEXT,
-    plan_pages_json TEXT,
-    takeoff_notes_json TEXT,
-    subtotal REAL NOT NULL DEFAULT 0,
-    status TEXT NOT NULL DEFAULT 'pending',
-    cut_sheet_emailed_at INTEGER,
-    created_at INTEGER
-  );
-`);
+// ── Migrations (create tables if not exist) ───────────────────────────────────
+async function runMigrations() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS conversations (
+      id SERIAL PRIMARY KEY,
+      phone TEXT NOT NULL,
+      customer_name TEXT,
+      customer_email TEXT,
+      customer_company TEXT,
+      delivery_address TEXT,
+      project_name TEXT,
+      project_address TEXT,
+      qbo_customer_id TEXT,
+      verified BOOLEAN NOT NULL DEFAULT false,
+      status TEXT NOT NULL DEFAULT 'active',
+      stage TEXT NOT NULL DEFAULT 'greeting',
+      pending_images_json TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
 
-// ── Column migrations (safe: ignore error if column already exists) ───────────
-const migrations = [
-  `ALTER TABLE conversations ADD COLUMN pending_images_json TEXT`,
-  `ALTER TABLE conversations ADD COLUMN project_name TEXT`,
-  `ALTER TABLE conversations ADD COLUMN project_address TEXT`,
-];
-for (const sql of migrations) {
-  try { sqlite.exec(sql); } catch { /* column already exists — safe to ignore */ }
+    CREATE TABLE IF NOT EXISTS messages (
+      id SERIAL PRIMARY KEY,
+      conversation_id INTEGER NOT NULL REFERENCES conversations(id),
+      direction TEXT NOT NULL,
+      body TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS orders (
+      id SERIAL PRIMARY KEY,
+      conversation_id INTEGER NOT NULL REFERENCES conversations(id),
+      qbo_invoice_id TEXT,
+      qbo_invoice_number TEXT,
+      payment_link TEXT,
+      line_items_json TEXT NOT NULL,
+      subtotal REAL NOT NULL DEFAULT 0,
+      delivery_fee REAL NOT NULL DEFAULT 0,
+      delivery_miles REAL,
+      total REAL NOT NULL DEFAULT 0,
+      delivery_type TEXT NOT NULL DEFAULT 'pickup',
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS products (
+      id SERIAL PRIMARY KEY,
+      qbo_item_id TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      description TEXT,
+      unit_price REAL,
+      unit_of_measure TEXT,
+      active BOOLEAN NOT NULL DEFAULT true,
+      synced_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS estimates (
+      id SERIAL PRIMARY KEY,
+      conversation_id INTEGER NOT NULL REFERENCES conversations(id),
+      qbo_estimate_id TEXT,
+      qbo_estimate_number TEXT,
+      qbo_estimate_link TEXT,
+      line_items_json TEXT NOT NULL,
+      fabrication_json TEXT,
+      plan_pages_json TEXT,
+      takeoff_notes_json TEXT,
+      subtotal REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      cut_sheet_emailed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
 }
 
+// Run migrations on startup (fire-and-forget, errors logged not thrown)
+runMigrations().catch(err => console.error("[DB] Migration error:", err));
+
+// ── Interface ─────────────────────────────────────────────────────────────────
 export interface IStorage {
   // Conversations
-  getOrCreateConversation(phone: string): Conversation;
-  getConversation(id: number): Conversation | undefined;
-  getConversationByPhone(phone: string): Conversation | undefined;
-  updateConversation(id: number, data: Partial<InsertConversation>): Conversation;
-  getAllConversations(): ConversationWithMessages[];
+  getOrCreateConversation(phone: string): Promise<Conversation>;
+  getConversation(id: number): Promise<Conversation | undefined>;
+  getConversationByPhone(phone: string): Promise<Conversation | undefined>;
+  updateConversation(id: number, data: Partial<InsertConversation>): Promise<Conversation>;
+  getAllConversations(): Promise<ConversationWithMessages[]>;
 
   // Messages
-  addMessage(data: InsertMessage): Message;
-  getMessages(conversationId: number): Message[];
+  addMessage(data: InsertMessage): Promise<Message>;
+  getMessages(conversationId: number): Promise<Message[]>;
 
   // Orders
-  createOrder(data: InsertOrder): Order;
-  updateOrder(id: number, data: Partial<InsertOrder>): Order;
-  getOrderByConversation(conversationId: number): Order | undefined;
-  getAllOrders(): Order[];
+  createOrder(data: InsertOrder): Promise<Order>;
+  updateOrder(id: number, data: Partial<InsertOrder>): Promise<Order>;
+  getOrderByConversation(conversationId: number): Promise<Order | undefined>;
+  getAllOrders(): Promise<Order[]>;
 
   // Products
-  upsertProduct(data: InsertProduct): Product;
-  getAllProducts(): Product[];
-  getProductByQboId(qboItemId: string): Product | undefined;
+  upsertProduct(data: InsertProduct): Promise<Product>;
+  getAllProducts(): Promise<Product[]>;
+  getProductByQboId(qboItemId: string): Promise<Product | undefined>;
 
   // Estimates
-  createEstimate(data: InsertEstimate): Estimate;
-  updateEstimate(id: number, data: Partial<InsertEstimate>): Estimate;
-  getEstimate(id: number): Estimate | undefined;
-  getEstimateByConversation(conversationId: number): Estimate | undefined;
-  getAllEstimates(): Estimate[];
+  createEstimate(data: InsertEstimate): Promise<Estimate>;
+  updateEstimate(id: number, data: Partial<InsertEstimate>): Promise<Estimate>;
+  getEstimate(id: number): Promise<Estimate | undefined>;
+  getEstimateByConversation(conversationId: number): Promise<Estimate | undefined>;
+  getAllEstimates(): Promise<Estimate[]>;
 
-  // Settings (key-value)
-  getSetting(key: string): string | null;
-  setSetting(key: string, value: string): void;
+  // Settings
+  getSetting(key: string): Promise<string | null>;
+  setSetting(key: string, value: string): Promise<void>;
 }
 
 export class Storage implements IStorage {
   // ── Conversations ───────────────────────────────────────────────────────────
-  getOrCreateConversation(phone: string): Conversation {
-    // First look for an active conversation
-    const active = db.select().from(conversations)
+  async getOrCreateConversation(phone: string): Promise<Conversation> {
+    // Look for active conversation
+    const [active] = await db.select().from(conversations)
       .where(and(eq(conversations.phone, phone), eq(conversations.status, "active")))
       .orderBy(desc(conversations.createdAt))
-      .get();
+      .limit(1);
     if (active) return active;
 
-    // If a completed conversation exists, reactivate it so the customer
-    // keeps their verified status and history rather than starting over.
-    // Preserve "invoiced" stage so the AI knows the invoice was already sent
-    // and the customer can ask follow-up questions without restarting ordering.
-    const completed = db.select().from(conversations)
+    // Reactivate completed conversation
+    const [completed] = await db.select().from(conversations)
       .where(and(eq(conversations.phone, phone), eq(conversations.status, "completed")))
       .orderBy(desc(conversations.updatedAt))
-      .get();
+      .limit(1);
     if (completed) {
       const nextStage = completed.stage === "invoiced" ? "invoiced" : "ordering";
-      // Clear pendingImagesJson on reactivation — otherwise PDFs / base64 images
-      // from the prior SQLite-persisted session bleed into the new conversation
-      // and contaminate any future takeoff.
-      return db.update(conversations)
+      const [updated] = await db.update(conversations)
         .set({ status: "active", stage: nextStage, pendingImagesJson: null, updatedAt: new Date() })
         .where(eq(conversations.id, completed.id))
-        .returning().get();
+        .returning();
+      return updated;
     }
 
-    // No history at all — brand new customer
-    return db.insert(conversations).values({
+    // Brand new customer
+    const [created] = await db.insert(conversations).values({
       phone,
       status: "active",
       stage: "greeting",
       pendingImagesJson: null,
       createdAt: new Date(),
       updatedAt: new Date(),
-    }).returning().get();
+    }).returning();
+    return created;
   }
 
-  getConversation(id: number): Conversation | undefined {
-    return db.select().from(conversations).where(eq(conversations.id, id)).get();
+  async getConversation(id: number): Promise<Conversation | undefined> {
+    const [row] = await db.select().from(conversations).where(eq(conversations.id, id));
+    return row;
   }
 
-  getConversationByPhone(phone: string): Conversation | undefined {
-    return db.select().from(conversations)
+  async getConversationByPhone(phone: string): Promise<Conversation | undefined> {
+    const [row] = await db.select().from(conversations)
       .where(and(eq(conversations.phone, phone), eq(conversations.status, "active")))
       .orderBy(desc(conversations.createdAt))
-      .get();
+      .limit(1);
+    return row;
   }
 
-  updateConversation(id: number, data: Partial<InsertConversation>): Conversation {
-    return db.update(conversations)
+  async updateConversation(id: number, data: Partial<InsertConversation>): Promise<Conversation> {
+    const [updated] = await db.update(conversations)
       .set({ ...data, updatedAt: new Date() })
       .where(eq(conversations.id, id))
-      .returning().get();
+      .returning();
+    return updated;
   }
 
-  getAllConversations(): ConversationWithMessages[] {
-    const convs = db.select().from(conversations).orderBy(desc(conversations.updatedAt)).all();
-    return convs.map(conv => ({
+  async getAllConversations(): Promise<ConversationWithMessages[]> {
+    const convs = await db.select().from(conversations).orderBy(desc(conversations.updatedAt));
+    return Promise.all(convs.map(async conv => ({
       ...conv,
-      messages: db.select().from(messages).where(eq(messages.conversationId, conv.id)).all(),
-      orders: db.select().from(orders).where(eq(orders.conversationId, conv.id)).all(),
-    }));
+      messages: await db.select().from(messages).where(eq(messages.conversationId, conv.id)),
+      orders: await db.select().from(orders).where(eq(orders.conversationId, conv.id)),
+    })));
   }
 
   // ── Messages ────────────────────────────────────────────────────────────────
-  addMessage(data: InsertMessage): Message {
-    return db.insert(messages).values({ ...data, createdAt: new Date() }).returning().get();
+  async addMessage(data: InsertMessage): Promise<Message> {
+    const [msg] = await db.insert(messages).values({ ...data, createdAt: new Date() }).returning();
+    return msg;
   }
 
-  getMessages(conversationId: number): Message[] {
+  async getMessages(conversationId: number): Promise<Message[]> {
     return db.select().from(messages)
       .where(eq(messages.conversationId, conversationId))
-      .orderBy(messages.createdAt)
-      .all();
+      .orderBy(messages.createdAt);
   }
 
   // ── Orders ──────────────────────────────────────────────────────────────────
-  createOrder(data: InsertOrder): Order {
-    return db.insert(orders).values({ ...data, createdAt: new Date() }).returning().get();
+  async createOrder(data: InsertOrder): Promise<Order> {
+    const [order] = await db.insert(orders).values({ ...data, createdAt: new Date() }).returning();
+    return order;
   }
 
-  updateOrder(id: number, data: Partial<InsertOrder>): Order {
-    return db.update(orders).set(data).where(eq(orders.id, id)).returning().get();
+  async updateOrder(id: number, data: Partial<InsertOrder>): Promise<Order> {
+    const [updated] = await db.update(orders).set(data).where(eq(orders.id, id)).returning();
+    return updated;
   }
 
-  getOrderByConversation(conversationId: number): Order | undefined {
-    return db.select().from(orders)
+  async getOrderByConversation(conversationId: number): Promise<Order | undefined> {
+    const [row] = await db.select().from(orders)
       .where(eq(orders.conversationId, conversationId))
       .orderBy(desc(orders.createdAt))
-      .get();
+      .limit(1);
+    return row;
   }
 
-  getAllOrders(): Order[] {
-    return db.select().from(orders).orderBy(desc(orders.createdAt)).all();
+  async getAllOrders(): Promise<Order[]> {
+    return db.select().from(orders).orderBy(desc(orders.createdAt));
   }
 
   // ── Products ────────────────────────────────────────────────────────────────
-  upsertProduct(data: InsertProduct): Product {
-    const existing = db.select().from(products).where(eq(products.qboItemId, data.qboItemId)).get();
+  async upsertProduct(data: InsertProduct): Promise<Product> {
+    const [existing] = await db.select().from(products).where(eq(products.qboItemId, data.qboItemId));
     if (existing) {
-      return db.update(products).set({ ...data, syncedAt: new Date() })
-        .where(eq(products.qboItemId, data.qboItemId)).returning().get();
+      const [updated] = await db.update(products).set({ ...data, syncedAt: new Date() })
+        .where(eq(products.qboItemId, data.qboItemId)).returning();
+      return updated;
     }
-    return db.insert(products).values({ ...data, syncedAt: new Date() }).returning().get();
+    const [created] = await db.insert(products).values({ ...data, syncedAt: new Date() }).returning();
+    return created;
   }
 
-  getAllProducts(): Product[] {
-    return db.select().from(products).where(eq(products.active, true)).all();
+  async getAllProducts(): Promise<Product[]> {
+    return db.select().from(products).where(eq(products.active, true));
   }
 
-  getProductByQboId(qboItemId: string): Product | undefined {
-    return db.select().from(products).where(eq(products.qboItemId, qboItemId)).get();
+  async getProductByQboId(qboItemId: string): Promise<Product | undefined> {
+    const [row] = await db.select().from(products).where(eq(products.qboItemId, qboItemId));
+    return row;
   }
 
   // ── Estimates ────────────────────────────────────────────────────────────────
-  createEstimate(data: InsertEstimate): Estimate {
-    return db.insert(estimates).values({ ...data, createdAt: new Date() }).returning().get();
+  async createEstimate(data: InsertEstimate): Promise<Estimate> {
+    const [est] = await db.insert(estimates).values({ ...data, createdAt: new Date() }).returning();
+    return est;
   }
 
-  updateEstimate(id: number, data: Partial<InsertEstimate>): Estimate {
-    return db.update(estimates).set(data).where(eq(estimates.id, id)).returning().get();
+  async updateEstimate(id: number, data: Partial<InsertEstimate>): Promise<Estimate> {
+    const [updated] = await db.update(estimates).set(data).where(eq(estimates.id, id)).returning();
+    return updated;
   }
 
-  getEstimate(id: number): Estimate | undefined {
-    return db.select().from(estimates).where(eq(estimates.id, id)).get();
+  async getEstimate(id: number): Promise<Estimate | undefined> {
+    const [row] = await db.select().from(estimates).where(eq(estimates.id, id));
+    return row;
   }
 
-  getEstimateByConversation(conversationId: number): Estimate | undefined {
-    return db.select().from(estimates)
+  async getEstimateByConversation(conversationId: number): Promise<Estimate | undefined> {
+    const [row] = await db.select().from(estimates)
       .where(eq(estimates.conversationId, conversationId))
       .orderBy(desc(estimates.createdAt))
-      .get();
+      .limit(1);
+    return row;
   }
 
-  getAllEstimates(): Estimate[] {
-    return db.select().from(estimates).orderBy(desc(estimates.createdAt)).all();
+  async getAllEstimates(): Promise<Estimate[]> {
+    return db.select().from(estimates).orderBy(desc(estimates.createdAt));
   }
 
-  // ── Settings (key-value) ────────────────────────────────────────────────────
-  getSetting(key: string): string | null {
-    const row = sqlite.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined;
+  // ── Settings ────────────────────────────────────────────────────────────────
+  async getSetting(key: string): Promise<string | null> {
+    const [row] = await db.select().from(settings).where(eq(settings.key, key));
     return row?.value ?? null;
   }
 
-  setSetting(key: string, value: string): void {
-    sqlite.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value);
+  async setSetting(key: string, value: string): Promise<void> {
+    await pool.query(
+      `INSERT INTO settings (key, value) VALUES ($1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [key, value]
+    );
   }
 }
 

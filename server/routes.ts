@@ -227,7 +227,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
     const customerGotPlans = mmsPdfUrls.length > 0 || pdfUrls.length > 0;
     if (customerGotPlans) {
       try {
-        const existingConvForForward = storage.getConversationByPhone(cleanPhone);
+        const existingConvForForward = await storage.getConversationByPhone(cleanPhone);
         const mmsLocalPaths = mmsPdfUrls
           .map(u => {
             const m = u.match(/\/api\/tmp\/(.+)$/);
@@ -252,7 +252,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
       // Must fire here (inside the async download scope) because the early
       // trigger further down can race or be bypassed by other gating logic.
       try {
-        const existingConv = storage.getConversationByPhone(cleanPhone);
+        const existingConv = await storage.getConversationByPhone(cleanPhone);
         if (
           existingConv &&
           existingConv.verified &&
@@ -265,20 +265,20 @@ export function registerRoutes(httpServer: Server, app: Express) {
           // Overwrite pendingImagesJson with ONLY the freshly downloaded MMS PDFs —
           // do NOT merge with stale prior-session entries. Any old PDFs, base64
           // images, or cross-session leftovers must not contaminate this takeoff.
-          storage.updateConversation(existingConv.id, {
+          await storage.updateConversation(existingConv.id, {
             stage: "plan_processing",
             pendingImagesJson: JSON.stringify(mmsPdfUrls.map(u => `pdf::${u}`)),
           });
 
           const ack = "Got your plans! I've forwarded them to our team for a detailed takeoff. We'll have your preliminary estimate ready shortly. In the meantime, can you provide the project name and delivery address so we can prepare your quote?";
-          storage.addMessage({ conversationId: existingConv.id, direction: "outbound", body: ack });
+          await storage.addMessage({ conversationId: existingConv.id, direction: "outbound", body: ack });
           try { await sendSms(cleanPhone, ack); } catch (smsErr: any) {
             console.warn(`[MMS] Ack SMS failed: ${smsErr?.message}`);
           }
 
           // Record inbound message before we return so the conversation log reflects it
           const bodyWithMedia = cleanBody || `[📎 PDF attached]`;
-          storage.addMessage({
+          await storage.addMessage({
             conversationId: existingConv.id,
             direction: "inbound",
             body: bodyWithMedia,
@@ -316,14 +316,14 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
     try {
       // Get or create conversation
-      let conv = storage.getOrCreateConversation(cleanPhone);
+      let conv = await storage.getOrCreateConversation(cleanPhone);
 
       // ── FRAUD GATE: existing customers only ──────────────────────────────────
       let justAutoVerified = false;
       if (conv.stage === "greeting" && !conv.verified && isQboConfigured()) {
         const found = await lookupCustomerByPhone(cleanPhone);
         if (found) {
-          conv = storage.updateConversation(conv.id, {
+          conv = await storage.updateConversation(conv.id, {
             verified: true,
             qboCustomerId: found.id,
             customerName: found.name,
@@ -351,7 +351,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
         // Deduplicate — never store the same URL twice (prevents duplicate takeoff on retry)
         const merged = [...existing];
         for (const u of newMedia) { if (!merged.includes(u)) merged.push(u); }
-        conv = storage.updateConversation(conv.id, { pendingImagesJson: JSON.stringify(merged) });
+        conv = await storage.updateConversation(conv.id, { pendingImagesJson: JSON.stringify(merged) });
         console.log(`[Images] Stored ${mediaUrls.length} image(s) + ${pdfUrls.length} PDF(s) — total pending: ${merged.length}`);
       }
 
@@ -360,7 +360,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
       const bodyWithMedia = (numMedia > 0 && !cleanBody)
         ? `[📷 ${numMedia} image(s) attached]`
         : cleanBody; // original URL/text always shown as-is
-      storage.addMessage({
+      await storage.addMessage({
         conversationId: conv.id,
         direction: "inbound",
         body: bodyWithMedia,
@@ -392,7 +392,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
           if (parsed.name && !conv.projectName) updates.projectName = parsed.name;
           if (parsed.address && !conv.projectAddress) updates.projectAddress = parsed.address;
           if (Object.keys(updates).length > 0) {
-            conv = storage.updateConversation(conv.id, updates);
+            conv = await storage.updateConversation(conv.id, updates);
             console.log(`[Project] Captured project info for conv ${conv.id}:`, updates);
           }
         }
@@ -410,7 +410,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
         conv.stage !== "estimating" &&
         conv.stage !== "invoice_review"
       ) {
-        conv = storage.updateConversation(conv.id, { stage: "plan_processing" });
+        conv = await storage.updateConversation(conv.id, { stage: "plan_processing" });
         const takeoffImages = [
           ...mediaUrls,
           ...pdfUrls.map(u => `pdf::${u}`),
@@ -428,9 +428,9 @@ export function registerRoutes(httpServer: Server, app: Express) {
       // ── Shortcut: END / DONE — customer explicitly closes the conversation ───
       const CLOSE_KEYWORDS = /^(done|bye|goodbye|end|close|that'?s? all|no more|nothing else|we'?re? good|all good|thank you that'?s? all|thanks that'?s? all|that will (be )?all)[\.!]?$/i;
       if (CLOSE_KEYWORDS.test(cleanBody.trim())) {
-        storage.updateConversation(conv.id, { status: "completed" });
+        await storage.updateConversation(conv.id, { status: "completed" });
         const closeMsg = `You're all set! Text us anytime if you need anything else. — Rebar Concrete Products (469) 631-7730`;
-        storage.addMessage({ conversationId: conv.id, direction: "outbound", body: closeMsg });
+        await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: closeMsg });
         try { await sendSms(cleanPhone, closeMsg); } catch {}
         return;
       }
@@ -458,14 +458,14 @@ export function registerRoutes(httpServer: Server, app: Express) {
             deliveryFee = stored.__deliveryFee || 0;
           } catch {}
 
-          storage.updateConversation(conv.id, { stage: "invoiced", status: "active", pendingImagesJson: null });
+          await storage.updateConversation(conv.id, { stage: "invoiced", status: "active", pendingImagesJson: null });
 
           const dLine = deliveryFee > 0 ? `\nDelivery: $${deliveryFee.toFixed(2)}` : "";
           const payMsg = paymentLink
             ? `Great! Here is your payment link for Invoice #${invoiceNumber}:\n\n${paymentLink}\n\nSubtotal: $${subtotal.toFixed(2)}\nTax (8.25%): $${taxAmount.toFixed(2)}${dLine}\nTotal: $${total.toFixed(2)}\n\nWe'll also email the invoice to ${conv.customerEmail}. Thank you!`
             : `Thank you for confirming! Invoice #${invoiceNumber} has been emailed to ${conv.customerEmail}. Total: $${total.toFixed(2)}. Call us at 469-631-7730 with any questions.`;
 
-          storage.addMessage({ conversationId: conv.id, direction: "outbound", body: payMsg });
+          await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: payMsg });
           let smsSent = false;
           try { await sendSms(cleanPhone, payMsg); smsSent = true; } catch (e: any) {
             console.error(`[SMS] Failed to send payment link: ${e?.message}`);
@@ -486,8 +486,8 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
         if (CORRECTION.test(cleanBody.trim())) {
           const corrMsg = `No problem! Please describe what needs to be corrected and we'll update the invoice for you. You can also call us at 469-631-7730.`;
-          storage.updateConversation(conv.id, { stage: "ordering" });
-          storage.addMessage({ conversationId: conv.id, direction: "outbound", body: corrMsg });
+          await storage.updateConversation(conv.id, { stage: "ordering" });
+          await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: corrMsg });
           try { await sendSms(cleanPhone, corrMsg); } catch {}
           return;
         }
@@ -501,18 +501,18 @@ export function registerRoutes(httpServer: Server, app: Express) {
         const LOOKS_GOOD_RETRY = /^(looks? good|approve[d]?)[\.!]?$/i;
         if (!LOOKS_GOOD_RETRY.test(cleanBody.trim())) {
           console.log(`[Stage] Resetting stage "invoiced" → "ordering" for conv ${conv.id} (new message after finalized invoice)`);
-          conv = storage.updateConversation(conv.id, { stage: "ordering" });
+          conv = await storage.updateConversation(conv.id, { stage: "ordering" });
         }
       }
 
       // ── Shortcut: APPROVE keyword from customer ────────────────────────────
       if (conv.stage === "estimating" && cleanBody.trim().toUpperCase() === "APPROVE") {
-        const est = storage.getEstimateByConversation(conv.id);
+        const est = await storage.getEstimateByConversation(conv.id);
         if (est && est.status !== "approved") {
           await handleEstimateApproval(est.id, conv.id, cleanPhone, est.qboEstimateNumber || "Estimate");
         } else {
           const noEst = "No pending estimate found. Call us at 469-631-7730 if you have questions.";
-          storage.addMessage({ conversationId: conv.id, direction: "outbound", body: noEst });
+          await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: noEst });
           await sendSms(cleanPhone, noEst);
         }
         return;
@@ -558,7 +558,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
         // No files yet — remind customer to send a link
         if (!cleanBody.includes("http") && mediaUrls.length === 0 && pdfUrls.length === 0) {
           const remind = `Still waiting on your plan set. You can text your plan set directly as a PDF attachment, or share a Google Drive or Dropbox direct-download link, and I'll start the takeoff right away.`;
-          storage.addMessage({ conversationId: conv.id, direction: "outbound", body: remind });
+          await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: remind });
           await sendSms(cleanPhone, remind);
           return;
         }
@@ -573,7 +573,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
         // which would otherwise geocode to unrelated locations hundreds of miles away.
         if (!isAddressComplete(intent.address)) {
           const askFull = `Can you confirm the full delivery address including city and state? For example: 3127 Briar Ridge, McKinney, TX 75071`;
-          storage.addMessage({ conversationId: conv.id, direction: "outbound", body: askFull });
+          await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: askFull });
           await sendSms(cleanPhone, askFull);
           return;
         }
@@ -581,7 +581,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
         let followUp: string;
         if (distResult) {
           // Encode miles + fee into the address field for retrieval at invoice time
-          storage.updateConversation(conv.id, {
+          await storage.updateConversation(conv.id, {
             deliveryAddress: `${intent.address}||MILES:${distResult.miles}||FEE:${distResult.fee}`,
           });
 
@@ -595,11 +595,11 @@ export function registerRoutes(httpServer: Server, app: Express) {
             followUp = `${intent.text ? intent.text + " " : ""}Your job site is ${distResult.miles} mi away. Delivery fee will be $${distResult.fee.toFixed(2)}. Ready to build your order?`;
           }
         } else {
-          storage.updateConversation(conv.id, { deliveryAddress: intent.address });
+          await storage.updateConversation(conv.id, { deliveryAddress: intent.address });
           followUp = `${intent.text ? intent.text + " " : ""}Got it. Our team will confirm the exact delivery fee on your invoice. Ready to build your order?`;
         }
 
-        storage.addMessage({ conversationId: conv.id, direction: "outbound", body: followUp });
+        await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: followUp });
         await sendSms(cleanPhone, followUp);
         return;
       }
@@ -607,7 +607,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
       // Save and send the AI reply (skip for lookup_orders — handler sends its own reply)
       const replyText = intent.text;
       if (replyText && intent.type !== "lookup_orders") {
-        storage.addMessage({
+        await storage.addMessage({
           conversationId: conv.id,
           direction: "outbound",
           body: replyText,
@@ -616,16 +616,16 @@ export function registerRoutes(httpServer: Server, app: Express) {
       } else if (!replyText && intent.type !== "lookup_orders" && intent.type !== "plan_takeoff") {
         // AI returned no text — send a fallback so the customer isn't left hanging
         const fallback = "Sorry, I wasn't able to process that. Please call us at 469-631-7730 and we'll help you out.";
-        storage.addMessage({ conversationId: conv.id, direction: "outbound", body: fallback });
+        await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: fallback });
         await sendSms(cleanPhone, fallback);
       }
 
       // Handle special intents
       if (intent.type === "info_complete") {
         // Extract and save customer info
-        const msgs = storage.getMessages(conv.id);
+        const msgs = await storage.getMessages(conv.id);
         const info = await extractCustomerInfo(msgs);
-        storage.updateConversation(conv.id, {
+        await storage.updateConversation(conv.id, {
           customerName: info.name || conv.customerName,
           customerEmail: info.email || conv.customerEmail,
           customerCompany: info.company || conv.customerCompany,
@@ -638,7 +638,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
         // pendingImagesJson while we asked for name/phone. Now that they're
         // verified, kick off the takeoff without making them re-send the file.
         try {
-          const refreshed = storage.getConversationByPhone(cleanPhone);
+          const refreshed = await storage.getConversationByPhone(cleanPhone);
           const pending: string[] = refreshed?.pendingImagesJson
             ? JSON.parse(refreshed.pendingImagesJson)
             : [];
@@ -664,7 +664,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
           await handlePlanTakeoff(conv.id, cleanPhone, imgs, rawPlanUrl);
         } else {
           // No images yet — AI already asked them to send pages; update stage
-          storage.updateConversation(conv.id, { stage: "takeoff_pending" });
+          await storage.updateConversation(conv.id, { stage: "takeoff_pending" });
         }
       }
 
@@ -695,7 +695,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
         // Re-run AI with the order history injected into system prompt
         const historyIntent = await processMessage(conv, cleanBody, mediaUrls, orderHistoryText);
         const historyReply = historyIntent.text || "I wasn't able to find your order history. Please call us at 469-631-7730 for help.";
-        storage.addMessage({ conversationId: conv.id, direction: "outbound", body: historyReply });
+        await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: historyReply });
         await sendSms(cleanPhone, historyReply);
       }
 
@@ -709,8 +709,8 @@ export function registerRoutes(httpServer: Server, app: Express) {
       try {
         const techErr = "Sorry, we ran into a technical issue. Please try again in a moment or call us at 469-631-7730 and we'll help you out.";
         try {
-          const errConv = storage.getConversationByPhone(cleanPhone);
-          if (errConv) storage.addMessage({ conversationId: errConv.id, direction: "outbound", body: techErr });
+          const errConv = await storage.getConversationByPhone(cleanPhone);
+          if (errConv) await storage.addMessage({ conversationId: errConv.id, direction: "outbound", body: techErr });
         } catch {}
         await sendSms(cleanPhone, techErr);
       } catch (_) {}
@@ -719,7 +719,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
   // ── Order Confirmation Handler ──────────────────────────────────────────────
   async function handleOrderConfirmation(conversationId: number, phone: string) {
-    const conv = storage.getConversation(conversationId);
+    const conv = await storage.getConversation(conversationId);
     if (!conv) return;
     // Guard: prevent concurrent duplicate invoice creation only if another
     // handleOrderConfirmation is already mid-flight for this conversation.
@@ -733,13 +733,13 @@ export function registerRoutes(httpServer: Server, app: Express) {
     // review — this lets the new order proceed as a fresh flow.
     if (conv.stage === "invoiced" || conv.stage === "invoice_review") {
       console.log(`[Order] Resetting stage "${conv.stage}" → "ordering" for new order (conv ${conversationId})`);
-      storage.updateConversation(conversationId, { stage: "ordering", pendingImagesJson: null });
+      await storage.updateConversation(conversationId, { stage: "ordering", pendingImagesJson: null });
     }
     orderConfirmationInProgress.add(conversationId);
     try {
 
-    const msgs = storage.getMessages(conversationId);
-    const products = storage.getAllProducts().filter(p => p.unitPrice !== null).slice(0, 80);
+    const msgs = await storage.getMessages(conversationId);
+    const products = await storage.getAllProducts().filter(p => p.unitPrice !== null).slice(0, 80);
 
     try {
       // Extract order details
@@ -827,7 +827,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
         // Only persist qboCustomerId here — stage transitions to "invoice_review"
         // below after the invoice is actually created, and to "invoiced" only after
         // the customer replies LOOKS GOOD.
-        storage.updateConversation(conversationId, { qboCustomerId });
+        await storage.updateConversation(conversationId, { qboCustomerId });
       }
 
       // Create invoice in QBO
@@ -861,7 +861,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
       }
 
       // Save order to DB
-      storage.createOrder({
+      await storage.createOrder({
         conversationId,
         qboInvoiceId: invoiceId || null,
         qboInvoiceNumber: invoiceNumber || null,
@@ -914,12 +914,12 @@ export function registerRoutes(httpServer: Server, app: Express) {
       ].filter(l => l !== null).join("\n");
 
       // Store payment link in conversation for retrieval after customer confirms
-      storage.updateConversation(conversationId, {
+      await storage.updateConversation(conversationId, {
         stage: "invoice_review",
         pendingImagesJson: JSON.stringify({ __paymentLink: paymentLink, __invoiceNumber: invoiceNumber, __total: total, __taxAmount: taxAmount, __subtotal: subtotal, __deliveryFee: deliveryFee }),
       });
 
-      storage.addMessage({ conversationId, direction: "outbound", body: reviewMsg });
+      await storage.addMessage({ conversationId, direction: "outbound", body: reviewMsg });
       try { await sendSms(phone, reviewMsg); } catch (e: any) {
         console.error(`[SMS] Failed to send invoice review: ${e?.message}`);
       }
@@ -927,7 +927,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
     } catch (err) {
       console.error("[Order] Failed to create invoice:", err);
       const orderErrMsg = `We had trouble creating your invoice. Please try again in a moment or call us at 469-631-7730 and we'll get it sorted out.`;
-      storage.addMessage({ conversationId, direction: "outbound", body: orderErrMsg });
+      await storage.addMessage({ conversationId, direction: "outbound", body: orderErrMsg });
       try { await sendSms(phone, orderErrMsg); } catch {}
     }
     } finally {
@@ -939,19 +939,19 @@ export function registerRoutes(httpServer: Server, app: Express) {
   // planSourceUrl: raw Dropbox/Drive URL from the customer's message, forwarded to sonar-pro when available.
   async function handlePlanTakeoff(conversationId: number, phone: string, imageUrls: string[], planSourceUrl?: string) {
     console.log(`[Takeoff] handlePlanTakeoff ENTER — conv=${conversationId}, phone=${phone}, imageUrls.length=${imageUrls.length}, planSourceUrl=${planSourceUrl ?? "none"}`);
-    const conv = storage.getConversation(conversationId);
+    const conv = await storage.getConversation(conversationId);
     if (!conv) {
       console.error(`[Takeoff] handlePlanTakeoff — conversation ${conversationId} not found, aborting`);
       return;
     }
 
     const ackMsg = `Got it! I'm analyzing your plan set now. This takes about 30–60 seconds — I'll send your estimate as soon as it's ready.`;
-    storage.addMessage({ conversationId, direction: "outbound", body: ackMsg });
+    await storage.addMessage({ conversationId, direction: "outbound", body: ackMsg });
     try { await sendSms(phone, ackMsg); } catch (smsErr: any) {
       console.warn(`[Takeoff] Ack SMS failed: ${smsErr?.message}`);
     }
 
-    const products = storage.getAllProducts();
+    const products = await storage.getAllProducts();
     console.log(`[Takeoff] Loaded ${products.length} products — calling performTakeoff()`);
 
     try {
@@ -964,10 +964,10 @@ export function registerRoutes(httpServer: Server, app: Express) {
           ? `I wasn't able to read enough detail from that PDF to build an estimate. For best results, share a Dropbox or Google Drive link instead of attaching the file directly — larger plan sets come through much clearer that way. Or call us at 469-631-7730 and we'll quote it manually.`
           : `I couldn't extract materials from those images. Make sure all pages are clear and in focus. Try resending or call us at 469-631-7730 for a manual quote.`;
         console.error(`[Takeoff] Zero line items — imageUrls: ${JSON.stringify(imageUrls.map(u => u.substring(0,80)))}`);
-        storage.addMessage({ conversationId, direction: "outbound", body: errMsg });
+        await storage.addMessage({ conversationId, direction: "outbound", body: errMsg });
         await sendSms(phone, errMsg);
         // Clear pendingImagesJson so stale PDFs don't bleed into the next takeoff
-        storage.updateConversation(conversationId, { stage: "ordering", pendingImagesJson: null });
+        await storage.updateConversation(conversationId, { stage: "ordering", pendingImagesJson: null });
         return;
       }
 
@@ -1022,7 +1022,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
         estimateLink = est.estimateLink;
       }
 
-      const savedEstimate = storage.createEstimate({
+      const savedEstimate = await storage.createEstimate({
         conversationId,
         qboEstimateId: estimateId || null,
         qboEstimateNumber: estimateNumber || null,
@@ -1076,9 +1076,9 @@ export function registerRoutes(httpServer: Server, app: Express) {
       // If nothing could be priced, tell customer and ask them to call
       if (pricedItems.length === 0) {
         const noPrice = `We were able to identify the materials in your plan set but couldn't determine quantities automatically. Please call us at 469-631-7730 and we'll put together a manual quote for you.\n\nItems identified:\n${unpricedItems.map(i => `- ${i.name}`).join("\n")}`;
-        storage.addMessage({ conversationId, direction: "outbound", body: noPrice });
+        await storage.addMessage({ conversationId, direction: "outbound", body: noPrice });
         await sendSms(phone, noPrice);
-        storage.updateConversation(conversationId, { stage: "ordering", pendingImagesJson: null });
+        await storage.updateConversation(conversationId, { stage: "ordering", pendingImagesJson: null });
         return;
       }
       const top5 = pricedItems.map(i => `${i.qty > 1 ? i.qty + "x " : ""}${i.name}: $${i.amount.toFixed(2)}`).join("\n");
@@ -1106,11 +1106,11 @@ export function registerRoutes(httpServer: Server, app: Express) {
         replyText = `Takeoff complete for ${takeoffResult.projectName}!\n\n${top5}${moreCount}${fabNote}${tbdNote}\n\nSubtotal: $${subtotal.toFixed(2)}${taxLine}${cutSheetNote}\n\nReply APPROVE to confirm this estimate, or call 469-631-7730 with questions.`;
       }
 
-      storage.addMessage({ conversationId, direction: "outbound", body: replyText });
+      await storage.addMessage({ conversationId, direction: "outbound", body: replyText });
       await sendSms(phone, replyText);
       // Clear pendingImagesJson — these PDFs have been processed and must not
       // be re-used on any future message in this conversation.
-      storage.updateConversation(conversationId, { stage: "estimating", pendingImagesJson: null });
+      await storage.updateConversation(conversationId, { stage: "estimating", pendingImagesJson: null });
 
       if (estimateId) {
         pollEstimateApproval(savedEstimate.id, estimateId, conversationId, phone, takeoffResult.projectName);
@@ -1119,10 +1119,10 @@ export function registerRoutes(httpServer: Server, app: Express) {
     } catch (err) {
       console.error("[Takeoff] Error:", err);
       const errMsg = `Something went wrong while reading your plan set. Please call us at 469-631-7730 and we\'ll get you a quote right away — usually within the hour.`;
-      storage.addMessage({ conversationId, direction: "outbound", body: errMsg });
+      await storage.addMessage({ conversationId, direction: "outbound", body: errMsg });
       await sendSms(phone, errMsg);
       // Also clear pendingImagesJson on error so a retry doesn't pick up stale data
-      storage.updateConversation(conversationId, { stage: "ordering", pendingImagesJson: null });
+      await storage.updateConversation(conversationId, { stage: "ordering", pendingImagesJson: null });
     }
   }
 
@@ -1145,7 +1145,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
           return;
         }
         if (status === "Rejected") {
-          storage.updateEstimate(estimateDbId, { status: "declined" });
+          await storage.updateEstimate(estimateDbId, { status: "declined" });
           return;
         }
       } catch (err) {
@@ -1165,8 +1165,8 @@ export function registerRoutes(httpServer: Server, app: Express) {
     phone: string,
     projectName: string
   ) {
-    const conv = storage.getConversation(conversationId);
-    const est = storage.getEstimate(estimateDbId);
+    const conv = await storage.getConversation(conversationId);
+    const est = await storage.getEstimate(estimateDbId);
     if (!conv || !est || est.status === "approved") return;
 
     try {
@@ -1188,7 +1188,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
           console.error("[Estimate] Failed to convert estimate to invoice:", convErr);
           // Notify customer so they aren't left waiting
           const convErrMsg = `Your estimate has been approved. We had a technical issue creating the invoice automatically — our team will follow up shortly, or call us at 469-631-7730.`;
-          storage.addMessage({ conversationId, direction: "outbound", body: convErrMsg });
+          await storage.addMessage({ conversationId, direction: "outbound", body: convErrMsg });
           await sendSms(phone, convErrMsg);
         }
       }
@@ -1214,7 +1214,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
         }
       }
 
-      storage.updateEstimate(estimateDbId, {
+      await storage.updateEstimate(estimateDbId, {
         status: "approved",
         cutSheetEmailedAt: new Date(),
       });
@@ -1227,7 +1227,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
         confirmMsg = `Estimate approved! Invoice #${invoiceNumber} has been created and emailed to ${customerEmail}. Our team will begin processing your order. Thank you!`;
       }
 
-      storage.addMessage({ conversationId, direction: "outbound", body: confirmMsg });
+      await storage.addMessage({ conversationId, direction: "outbound", body: confirmMsg });
       const smsSent = await sendSms(phone, confirmMsg);
 
       // Email fallback if SMS fails
@@ -1243,19 +1243,19 @@ export function registerRoutes(httpServer: Server, app: Express) {
         } catch (_) {}
       }
 
-      storage.updateConversation(conversationId, { stage: "invoiced", status: "active" });
+      await storage.updateConversation(conversationId, { stage: "invoiced", status: "active" });
     } catch (err) {
       console.error("[Estimate] Approval handler failed:", err);
       try {
         const errMsg = "There was an issue processing your approval. Please call us at 469-631-7730 and we'll take care of you.";
-        storage.addMessage({ conversationId, direction: "outbound", body: errMsg });
+        await storage.addMessage({ conversationId, direction: "outbound", body: errMsg });
         await sendSms(phone, errMsg);
       } catch (_) {}
     }
   }
 
   // ── Serve temp files (MMS PDFs downloaded from Twilio) ─────────────────────
-  app.get("/api/tmp/:filename", (req, res) => {
+  app.get("/api/tmp/:filename", async (req, res) => {
     const filename = path.basename(req.params.filename); // prevent path traversal
     const tmpPath = path.join(os.tmpdir(), filename);
     if (!fs.existsSync(tmpPath)) {
@@ -1269,70 +1269,70 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
   // ── Admin API ───────────────────────────────────────────────────────────────
   // Get all conversations with messages
-  app.get("/api/conversations", (_req, res) => {
-    const convs = storage.getAllConversations();
+  app.get("/api/conversations", async (_req, res) => {
+    const convs = await storage.getAllConversations();
     res.json(convs);
   });
 
   // Get single conversation
-  app.get("/api/conversations/:id", (req, res) => {
+  app.get("/api/conversations/:id", async (req, res) => {
     const id = parseInt(req.params.id);
-    const conv = storage.getConversation(id);
+    const conv = await storage.getConversation(id);
     if (!conv) return res.status(404).json({ error: "Not found" });
-    const msgs = storage.getMessages(id);
-    const orders = storage.getOrderByConversation(id);
+    const msgs = await storage.getMessages(id);
+    const orders = await storage.getOrderByConversation(id);
     res.json({ ...conv, messages: msgs, order: orders });
   });
 
   // Send manual reply from dashboard
   app.post("/api/conversations/:id/reply", async (req, res) => {
     const id = parseInt(req.params.id);
-    const conv = storage.getConversation(id);
+    const conv = await storage.getConversation(id);
     if (!conv) return res.status(404).json({ error: "Not found" });
 
     const { message } = req.body;
     if (!message) return res.status(400).json({ error: "message required" });
 
     await sendSms(conv.phone, message);
-    storage.addMessage({ conversationId: id, direction: "outbound", body: message });
+    await storage.addMessage({ conversationId: id, direction: "outbound", body: message });
     res.json({ ok: true });
   });
 
   // Get all orders (enriched with customer name + phone from conversation)
-  app.get("/api/orders", (_req, res) => {
-    const allOrders = storage.getAllOrders();
-    const enriched = allOrders.map(order => {
-      const conv = storage.getConversation(order.conversationId);
+  app.get("/api/orders", async (_req, res) => {
+    const allOrders = await storage.getAllOrders();
+    const enriched = await Promise.all(allOrders.map(async order => {
+      const conv = await storage.getConversation(order.conversationId);
       return {
         ...order,
         customerName: conv?.customerName ?? null,
         customerPhone: conv?.phone ?? null,
       };
-    });
+    }));
     res.json(enriched);
   });
 
   // Get all estimates
-  app.get("/api/estimates", (_req, res) => {
-    const allEstimates = storage.getAllEstimates();
-    const enriched = allEstimates.map(est => {
-      const conv = storage.getConversation(est.conversationId);
+  app.get("/api/estimates", async (_req, res) => {
+    const allEstimates = await storage.getAllEstimates();
+    const enriched = await Promise.all(allEstimates.map(async est => {
+      const conv = await storage.getConversation(est.conversationId);
       return {
         ...est,
         customerName: conv?.customerName ?? null,
         customerPhone: conv?.phone ?? null,
         customerEmail: conv?.customerEmail ?? null,
       };
-    });
+    }));
     res.json(enriched);
   });
 
   // Manually approve an estimate (admin action)
   app.post("/api/estimates/:id/approve", async (req, res) => {
     const id = parseInt(req.params.id);
-    const est = storage.getEstimate(id);
+    const est = await storage.getEstimate(id);
     if (!est) return res.status(404).json({ error: "Not found" });
-    const conv = storage.getConversation(est.conversationId);
+    const conv = await storage.getConversation(est.conversationId);
     if (!conv) return res.status(404).json({ error: "Conversation not found" });
     try {
       await handleEstimateApproval(id, est.conversationId, conv.phone, est.qboEstimateNumber || "Estimate");
@@ -1343,23 +1343,24 @@ export function registerRoutes(httpServer: Server, app: Express) {
   });
 
   // Get all products (from QBO cache)
-  app.get("/api/products", (_req, res) => {
-    res.json(storage.getAllProducts());
+  app.get("/api/products", async (_req, res) => {
+    res.json(await storage.getAllProducts());
   });
 
   // Manually trigger a QBO product sync
   app.post("/api/products/sync", async (_req, res) => {
     try {
       await syncProducts();
-      res.json({ ok: true, count: storage.getAllProducts().length });
+      const prods = await storage.getAllProducts();
+      res.json({ ok: true, count: prods.length });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
   // Setup status (used by Setup page)
-  app.get("/api/setup/status", (_req, res) => {
-    const products = storage.getAllProducts();
+  app.get("/api/setup/status", async (_req, res) => {
+    const products = await storage.getAllProducts();
     const realmId = process.env.QBO_REALM_ID;
     res.json({
       twilio: isTwilioConfigured(),
@@ -1371,18 +1372,18 @@ export function registerRoutes(httpServer: Server, app: Express) {
   });
 
   // System status
-  app.get("/api/status", (_req, res) => {
+  app.get("/api/status", async (_req, res) => {
     res.json({
       twilio: isTwilioConfigured(),
       qbo: isQboConfigured(),
       openai: isAiConfigured(),
-      products: storage.getAllProducts().length,
-      conversations: storage.getAllConversations().length,
+      products: await storage.getAllProducts().length,
+      conversations: await storage.getAllConversations().length,
     });
   });
 
   // ── QBO OAuth Flow (one-time setup) ─────────────────────────────────────────
-  app.get("/api/qbo/connect", (_req, res) => {
+  app.get("/api/qbo/connect", async (_req, res) => {
     try {
       const clientId = process.env.QBO_CLIENT_ID;
       if (!clientId) return res.status(400).send("QBO_CLIENT_ID not set");
@@ -1404,7 +1405,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
   // ── Inbound Voice Call (IVR Auto-Attendant) ────────────────────────────────
   // Point Twilio voice webhook to: POST /api/voice/inbound
-  app.post("/api/voice/inbound", (req, res) => {
+  app.post("/api/voice/inbound", async (req, res) => {
     const appUrl = process.env.APP_URL || "http://localhost:5000";
     res.set("Content-Type", "text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
@@ -1423,7 +1424,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
   });
 
   // ── IVR Menu Handler ────────────────────────────────────────────────────────
-  app.post("/api/voice/menu", (req, res) => {
+  app.post("/api/voice/menu", async (req, res) => {
     const digit = req.body.Digits || "";
     const appUrl = process.env.APP_URL || "http://localhost:5000";
     const forwardNumber = process.env.FORWARD_PHONE || "4696317730";
@@ -1467,7 +1468,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
   });
 
   // ── No Answer Fallback (forward didn't connect) ─────────────────────────────
-  app.post("/api/voice/no-answer", (req, res) => {
+  app.post("/api/voice/no-answer", async (req, res) => {
     const appUrl = process.env.APP_URL || "http://localhost:5000";
     const dialStatus = req.body.DialCallStatus || "no-answer";
     res.set("Content-Type", "text/xml");
@@ -1569,8 +1570,8 @@ export function registerRoutes(httpServer: Server, app: Express) {
         setLiveRefreshToken(tokens.refresh_token);
         try {
           console.log('[QBO] Saving refresh token to SQLite:', tokens.refresh_token.substring(0, 20));
-          storage.setSetting("qbo_refresh_token", tokens.refresh_token);
-          const verify = storage.getSetting("qbo_refresh_token");
+          await storage.setSetting("qbo_refresh_token", tokens.refresh_token);
+          const verify = await storage.getSetting("qbo_refresh_token");
           console.log('[QBO] SQLite verify after save — stored token prefix:', verify ? verify.substring(0, 20) : '(null)');
         } catch (dbErr: any) {
           console.error('[QBO] FAILED to persist refresh token to SQLite:', dbErr?.message, dbErr?.stack);
@@ -1637,8 +1638,8 @@ export function registerRoutes(httpServer: Server, app: Express) {
         setLiveRefreshToken(tokens.refresh_token);
         try {
           console.log('[QBO] Saving refresh token to SQLite:', tokens.refresh_token.substring(0, 20));
-          storage.setSetting("qbo_refresh_token", tokens.refresh_token);
-          const verify = storage.getSetting("qbo_refresh_token");
+          await storage.setSetting("qbo_refresh_token", tokens.refresh_token);
+          const verify = await storage.getSetting("qbo_refresh_token");
           console.log('[QBO] SQLite verify after save — stored token prefix:', verify ? verify.substring(0, 20) : '(null)');
         } catch (dbErr: any) {
           console.error('[QBO] FAILED to persist refresh token to SQLite:', dbErr?.message, dbErr?.stack);
