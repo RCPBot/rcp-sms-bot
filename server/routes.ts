@@ -835,8 +835,39 @@ export function registerRoutes(httpServer: Server, app: Express) {
       let invoiceNumber = "";
       let paymentLink: string | null = null;
 
+      // Bundle counts per bar size (20' bars)
+      const BUNDLE_SIZES: Record<string, number> = {
+        "#3": 266, "#4": 150, "#5": 96, "#6": 68,
+        "#7": 50, "#8": 38, "#9": 30, "#10": 24, "#11": 18, "#14": 10, "#18": 6
+      };
+
+      // Enrich line item descriptions with bundle + piece breakdown for warehouse
+      function addBundleDesc(item: LineItem): LineItem {
+        // Skip fabrication, delivery, custom items
+        if (item.qboItemId === "1010000301" || item.qboItemId === "CUSTOM") return item;
+        // Parse bar size from name (e.g. "Rebar #4 20'" → "#4")
+        const sizeMatch = item.name.match(/(#\d+)/);
+        if (!sizeMatch) return item;
+        const barSize = sizeMatch[1];
+        const bundleSize = BUNDLE_SIZES[barSize];
+        if (!bundleSize) return item;
+        const pcs = Math.round(item.qty);
+        const fullBundles = Math.floor(pcs / bundleSize);
+        const remainder = pcs % bundleSize;
+        let bundleDesc = "";
+        if (fullBundles > 0 && remainder > 0) {
+          bundleDesc = `${fullBundles} full bundle${fullBundles > 1 ? "s" : ""} (${fullBundles * bundleSize} pcs) + ${remainder} individual pcs — ${pcs} pcs total`;
+        } else if (fullBundles > 0) {
+          bundleDesc = `${fullBundles} full bundle${fullBundles > 1 ? "s" : ""} — ${pcs} pcs total`;
+        } else {
+          bundleDesc = `${pcs} individual pcs (no full bundles)`;
+        }
+        const existingDesc = item.description ? `${item.description} | ` : "";
+        return { ...item, description: `${existingDesc}${bundleDesc}` };
+      }
+
       if (qboCustomerId && isQboConfigured()) {
-        const qboInvoiceItems = (orderData.lineItems as LineItem[]).filter(i => i.qboItemId !== "CUSTOM");
+        const qboInvoiceItems = (orderData.lineItems as LineItem[]).filter(i => i.qboItemId !== "CUSTOM").map(addBundleDesc);
         const customInvoiceItems = (orderData.lineItems as LineItem[]).filter(i => i.qboItemId === "CUSTOM");
         const customInvoiceNote = customInvoiceItems.length > 0
           ? ` | Unmatched items (TBD): ${customInvoiceItems.map(i => i.name).join(", ")}`
