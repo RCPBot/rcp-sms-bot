@@ -563,8 +563,8 @@ export async function processMessage(
   orderHistory?: string,
   justAutoVerified: boolean = false
 ): Promise<AIIntent> {
-  const products = storage.getAllProducts();
-  const history = storage.getMessages(conversation.id);
+  const products = await storage.getAllProducts();
+  const history = await storage.getMessages(conversation.id);
 
   let systemPrompt = buildSystemPrompt(products, conversation);
   if (orderHistory) {

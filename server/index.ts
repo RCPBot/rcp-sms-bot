@@ -4,6 +4,7 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { runMigrations } from "./storage";
+import { initQboToken } from "./qbo";
 
 const app = express();
 const httpServer = createServer(app);
@@ -68,6 +69,9 @@ app.use((req, res, next) => {
     process.exit(1);
   });
   console.log("[DB] Migrations complete");
+
+  // Load persisted QBO token from DB into memory before routes start
+  await initQboToken();
 
   await registerRoutes(httpServer, app);
 

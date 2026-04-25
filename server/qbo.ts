@@ -18,6 +18,21 @@ export function setLiveRefreshToken(token: string) {
   _tokenExpiry = 0;
 }
 
+// Called at startup after DB migrations — loads persisted token into memory
+export async function initQboToken(): Promise<void> {
+  try {
+    const stored = await storage.getSetting("qbo_refresh_token");
+    if (stored) {
+      liveRefreshToken = stored;
+      console.log("[QBO] Loaded refresh token from DB:", stored.substring(0, 20));
+    } else {
+      console.log("[QBO] No persisted token found — will use env var QBO_REFRESH_TOKEN");
+    }
+  } catch (err: any) {
+    console.error("[QBO] Failed to load token from DB:", err?.message);
+  }
+}
+
 export async function updateRailwayEnvVar(key: string, value: string): Promise<void> {
   try {
     const railwayToken = process.env.RAILWAY_TOKEN;
@@ -51,10 +66,10 @@ export async function updateRailwayEnvVar(key: string, value: string): Promise<v
 }
 
 function getCurrentRefreshToken(): string {
+  // liveRefreshToken is loaded from DB at startup via initQboToken()
+  // and rotated in-memory whenever a new token is issued
   if (liveRefreshToken) return liveRefreshToken;
-  // Prefer the rotated token persisted in SQLite; fall back to the env seed.
-  const stored = storage.getSetting("qbo_refresh_token");
-  return stored || process.env.QBO_REFRESH_TOKEN || "";
+  return process.env.QBO_REFRESH_TOKEN || "";
 }
 
 function cfg() {
@@ -99,7 +114,7 @@ async function getAccessToken(): Promise<string> {
   if (data.refresh_token && data.refresh_token !== refreshToken) {
     liveRefreshToken = data.refresh_token;
     storage.setSetting("qbo_refresh_token", data.refresh_token);
-    console.log("[QBO] Refresh token rotated — persisted to SQLite settings table");
+    console.log("[QBO] Refresh token rotated — persisted to DB settings table");
     updateRailwayEnvVar("QBO_REFRESH_TOKEN", data.refresh_token).catch(console.error);
   }
 

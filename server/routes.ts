@@ -1569,12 +1569,12 @@ export function registerRoutes(httpServer: Server, app: Express) {
         process.env.QBO_REFRESH_TOKEN = tokens.refresh_token;
         setLiveRefreshToken(tokens.refresh_token);
         try {
-          console.log('[QBO] Saving refresh token to SQLite:', tokens.refresh_token.substring(0, 20));
+          console.log('[QBO] Saving refresh token to DB:', tokens.refresh_token.substring(0, 20));
           await storage.setSetting("qbo_refresh_token", tokens.refresh_token);
           const verify = await storage.getSetting("qbo_refresh_token");
-          console.log('[QBO] SQLite verify after save — stored token prefix:', verify ? verify.substring(0, 20) : '(null)');
+          console.log('[QBO] DB verify after save — stored token prefix:', verify ? verify.substring(0, 20) : '(null)');
         } catch (dbErr: any) {
-          console.error('[QBO] FAILED to persist refresh token to SQLite:', dbErr?.message, dbErr?.stack);
+          console.error('[QBO] FAILED to persist refresh token to DB:', dbErr?.message, dbErr?.stack);
         }
         updateRailwayEnvVar("QBO_REFRESH_TOKEN", tokens.refresh_token).catch(console.error);
         updateRailwayEnvVar("QBO_REALM_ID", realmId).catch(console.error);
@@ -1637,12 +1637,12 @@ export function registerRoutes(httpServer: Server, app: Express) {
         process.env.QBO_REFRESH_TOKEN = tokens.refresh_token;
         setLiveRefreshToken(tokens.refresh_token);
         try {
-          console.log('[QBO] Saving refresh token to SQLite:', tokens.refresh_token.substring(0, 20));
+          console.log('[QBO] Saving refresh token to DB:', tokens.refresh_token.substring(0, 20));
           await storage.setSetting("qbo_refresh_token", tokens.refresh_token);
           const verify = await storage.getSetting("qbo_refresh_token");
-          console.log('[QBO] SQLite verify after save — stored token prefix:', verify ? verify.substring(0, 20) : '(null)');
+          console.log('[QBO] DB verify after save — stored token prefix:', verify ? verify.substring(0, 20) : '(null)');
         } catch (dbErr: any) {
-          console.error('[QBO] FAILED to persist refresh token to SQLite:', dbErr?.message, dbErr?.stack);
+          console.error('[QBO] FAILED to persist refresh token to DB:', dbErr?.message, dbErr?.stack);
         }
         updateRailwayEnvVar("QBO_REFRESH_TOKEN", tokens.refresh_token).catch(console.error);
         updateRailwayEnvVar("QBO_REALM_ID", realmId).catch(console.error);
