@@ -21,15 +21,15 @@ export default function ConversationDetail() {
   const { toast } = useToast();
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "instant" });
-  }, [conv?.messages?.length]);
-
   const { data: conv, isLoading } = useQuery({
     queryKey: ["/api/conversations", id],
     queryFn: () => apiRequest("GET", `/api/conversations/${id}`).then(r => r.json()),
     refetchInterval: 8000,
   });
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "instant" });
+  }, [conv?.messages?.length]);
 
   const replyMutation = useMutation({
     mutationFn: (message: string) =>
