@@ -765,10 +765,23 @@ export function registerRoutes(httpServer: Server, app: Express) {
         }
         return true;
       });
-      // Recompute amount from qty × unitPrice to avoid floating-point mismatch QBO rejects
+      // Override unitPrice with exact DB price (AI rounds prices — never trust AI math for money)
+      // Fabrication-1 is always $0.75 exactly — never override that
+      const FAB_QBO_ID_ROUTE = "1010000301";
       validItems.forEach((item: any) => {
-        item.amount = Math.round(item.qty * item.unitPrice * 100) / 100;
+        if (item.qboItemId !== FAB_QBO_ID_ROUTE) {
+          const dbProduct = products.find((p: any) => String(p.qboItemId) === String(item.qboItemId));
+          if (dbProduct && dbProduct.unitPrice !== null && dbProduct.unitPrice !== undefined) {
+            const exactPrice = parseFloat(String(dbProduct.unitPrice));
+            if (!isNaN(exactPrice)) {
+              item.unitPrice = exactPrice;
+            }
+          }
+        }
+        // Recompute amount from qty × exact unitPrice
+        item.amount = item.qty * item.unitPrice;
       });
+      console.log("[Order] Line items after exact-price override:", JSON.stringify(validItems.map((i: any) => ({ name: i.name, qty: i.qty, unitPrice: i.unitPrice, amount: i.amount }))));
       console.log("[Order] Valid line items after filter:", JSON.stringify(validItems));
       if (validItems.length === 0) {
         console.error("[Order] No line items with valid qboItemId — falling back to pending order");
