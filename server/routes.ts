@@ -1951,4 +1951,31 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       res.status(500).json({ error: err.message || "Failed to create order" });
     }
   });
+
+  // ── Delivery distance + fee lookup (used by EstimatingBot chat) ──────────────
+  // GET /api/calc-delivery?address=<encoded address>
+  // Returns { miles, fee, free, freeThreshold } or { error }
+  app.get("/api/calc-delivery", async (req, res) => {
+    const address = req.query.address as string;
+    if (!address) return res.status(400).json({ error: "address is required" });
+    try {
+      const result = await calcDeliveryFee(address);
+      if (!result) return res.status(422).json({ error: "Could not calculate distance — check the address and try again." });
+      // Determine which free delivery tier applies at this distance
+      const FREE_DELIVERY_TIERS = [
+        { miles: 30, minOrder: 1000 },
+        { miles: 40, minOrder: 2000 },
+        { miles: 55, minOrder: 4000 },
+        { miles: 65, minOrder: 8000 },
+      ];
+      const tier = FREE_DELIVERY_TIERS.find(t => result.miles <= t.miles);
+      res.json({
+        miles: result.miles,
+        fee: result.fee,
+        freeThreshold: tier ? tier.minOrder : null,  // min order for free delivery at this distance
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Distance lookup failed" });
+    }
+  });
 }
