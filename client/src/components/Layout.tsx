@@ -1,10 +1,11 @@
 import { Link, useLocation } from "wouter";
-import { MessageSquare, ShoppingCart, Package, Settings, Zap } from "lucide-react";
+import { MessageSquare, ShoppingCart, Package, Settings, Zap, History } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 
 const navItems = [
-  { href: "/", label: "Conversations", icon: MessageSquare },
+  { href: "/", label: "Dashboard", icon: MessageSquare },
+  { href: "/conversations", label: "Chat History", icon: History },
   { href: "/orders", label: "Orders", icon: ShoppingCart },
   { href: "/products", label: "Products", icon: Package },
   { href: "/setup", label: "Setup", icon: Settings },

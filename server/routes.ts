@@ -24,38 +24,37 @@ const orderConfirmationInProgress = new Set<number>();
  * Subtotal/Tax/Total lines the AI wrote with the correct numbers.
  * This ensures the quote message always matches the invoice.
  */
-async function fixPriceText(text: string): Promise<string> {
-  // Only act if the message contains subtotal/tax/total lines
-  if (!/subtotal/i.test(text) || !/tax/i.test(text)) return text;
+/**
+ * Server-side price correction for AI quote messages.
+ *
+ * Strategy: find the line-item block ("- NNN bars/pcs of #X..."),
+ * compute exact subtotal from DB prices, then CUT the entire
+ * Subtotal/Tax/Total section the AI wrote and REPLACE it with
+ * server-computed exact numbers. No regex arithmetic on the AI text.
+ */
+async function fixPriceText(text: string, deliveryFee = 0): Promise<string> {
+  // Only act if the message contains a subtotal line
+  if (!/subtotal/i.test(text)) return text;
 
   const products = await storage.getAllProducts();
 
-  // Find all "NNN bars/pcs of #X" patterns in the text
-  const qtyBarRe = /(\d+)\s*(?:x\s+)?(?:bars?|pcs?|pieces?|sticks?)?\s*(?:of\s+)?(?:Rebar\s+)?#(\d+)\s*(?:\([^)]+\))?\s*(20'|20\s*ft|40'|40\s*ft)?/gi;
+  // ── Step 1: parse line items from the text ───────────────────────────────
+  // Match the bullet/dash line items the AI writes:
+  // "- 925 bars of #3 (3/8") 20': ..."
+  // "• 600x Rebar #3 (3/8") 20': ..."
+  // We only look at ITEM lines (starting with - or •), not the intro sentence,
+  // to avoid counting the same product twice.
+  const lineItemRe = /^[\-•]\s*(\d+)(?:x)?\s*(?:bars?|pcs?|pieces?|sticks?)?\s*(?:of\s+)?(?:Rebar\s+)?#(\d+)[^\n]*(20'|20\s*ft|40'|40\s*ft)?/gim;
   let match: RegExpExecArray | null;
-  let computedSubtotal: number | null = null;
-  let deliveryFee = 0;
-
-  // Extract delivery fee if present in the text
-  const deliveryMatch = text.match(/Delivery:\s*\$(\d[\d,]*\.?\d*)/i);
-  if (deliveryMatch) {
-    deliveryFee = parseFloat(deliveryMatch[1].replace(/,/g, ''));
-  }
-
-  qtyBarRe.lastIndex = 0;
-  let totalFromItems = 0;
+  let subtotal = 0;
   let foundAny = false;
-  // Deduplicate: track which size+length combos we've already added
-  // so a message saying "925 pieces of #3" and "925 bars of #3" doesn't double-count
-  const seen = new Set<string>();
-  while ((match = qtyBarRe.exec(text)) !== null) {
+
+  lineItemRe.lastIndex = 0;
+  while ((match = lineItemRe.exec(text)) !== null) {
     const qty = parseInt(match[1], 10);
     const size = match[2];
-    const lengthRaw = match[3];
-    const length = lengthRaw && lengthRaw.startsWith('40') ? '40' : '20';
-    const key = `${qty}-${size}-${length}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const lengthStr = match[3];
+    const length = lengthStr && lengthStr.trim().startsWith('40') ? '40' : '20';
 
     const product = products.find(p => {
       if (!p.unitPrice) return false;
@@ -64,29 +63,57 @@ async function fixPriceText(text: string): Promise<string> {
     });
 
     if (product && product.unitPrice) {
-      const unitPrice = parseFloat(String(product.unitPrice));
-      totalFromItems += qty * unitPrice;
+      subtotal += qty * parseFloat(String(product.unitPrice));
       foundAny = true;
     }
   }
 
   if (!foundAny) return text;
 
-  computedSubtotal = totalFromItems;
-  const computedTax = computedSubtotal * TAX_RATE;
-  const computedTotal = computedSubtotal + computedTax + deliveryFee;
+  // ── Step 2: cut everything from "Subtotal:" onward and replace ───────────
+  // Work line-by-line: find the Subtotal line, extend through Tax/Delivery/Total,
+  // then replace the entire block with server-computed values.
+  const lines = text.split('\n');
+  const subIdx = lines.findIndex(l => /^subtotal/i.test(l.trim()));
+  if (subIdx === -1) return text;
 
-  // Replace Subtotal line
-  text = text.replace(/Subtotal:\s*\$[\d,]+\.\d{2}/gi,
-    `Subtotal: $${computedSubtotal.toFixed(2)}`);
-  // Replace Tax line
-  text = text.replace(/Tax\s*\([^)]+\):\s*\$[\d,]+\.\d{2}/gi,
-    `Tax (8.25%): $${computedTax.toFixed(2)}`);
-  // Replace Total line (not Subtotal)
-  text = text.replace(/(?<!Sub)Total:\s*\$[\d,]+\.\d{2}/gi,
-    `Total: $${computedTotal.toFixed(2)}`);
+  // Extend endIdx through all price lines (Subtotal / Tax / Delivery / Total)
+  let endIdx = subIdx;
+  for (let i = subIdx; i < lines.length; i++) {
+    const l = lines[i].trim();
+    if (/^(subtotal|tax|delivery|total)/i.test(l)) {
+      endIdx = i;
+    } else if (l === '') {
+      // blank line — peek ahead: if next non-blank is a price line, keep going
+      const next = lines.slice(i + 1).find(ll => ll.trim() !== '');
+      if (next && /^(subtotal|tax|delivery|total)/i.test(next.trim())) continue;
+      break;
+    } else {
+      break;
+    }
+  }
 
-  return text;
+  const tax = subtotal * TAX_RATE;
+  const total = subtotal + tax + deliveryFee;
+
+  const priceLines = [
+    `Subtotal: $${subtotal.toFixed(2)}`,
+    `Tax (8.25%): $${tax.toFixed(2)}`,
+    ...(deliveryFee > 0 ? [`Delivery: $${deliveryFee.toFixed(2)}`] : []),
+    `Total: $${total.toFixed(2)}`,
+  ];
+
+  const beforeLines = lines.slice(0, subIdx);
+  const afterLines = lines.slice(endIdx + 1);
+  // Strip leading blank lines from afterLines
+  while (afterLines.length && afterLines[0].trim() === '') afterLines.shift();
+
+  const resultLines = [
+    ...beforeLines,
+    ...priceLines,
+    ...(afterLines.length ? ['', ...afterLines] : []),
+  ];
+  return resultLines.join('\n').trimEnd();
 }
 
 // Best-effort parser for "project name + delivery address" customer replies.

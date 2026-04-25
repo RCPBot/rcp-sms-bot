@@ -5,6 +5,7 @@ import { queryClient } from "@/lib/queryClient";
 import { Toaster } from "@/components/ui/toaster";
 import Dashboard from "@/pages/Dashboard";
 import ConversationDetail from "@/pages/ConversationDetail";
+import Conversations from "@/pages/Conversations";
 import Orders from "@/pages/Orders";
 import Products from "@/pages/Products";
 import Setup from "@/pages/Setup";
@@ -19,6 +20,7 @@ export default function App() {
           <Switch>
             <Route path="/" component={Dashboard} />
             <Route path="/conversations/:id" component={ConversationDetail} />
+            <Route path="/conversations" component={Conversations} />
             <Route path="/orders" component={Orders} />
             <Route path="/products" component={Products} />
             <Route path="/setup" component={Setup} />
