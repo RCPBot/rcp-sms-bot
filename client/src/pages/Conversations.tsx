@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useState, useMemo } from "react";
-import { useLocation } from "wouter";
 import {
   MessageSquare, Search, ChevronDown, ChevronUp,
   AlertTriangle, CheckCircle, Clock, DollarSign, Phone, Mail, Building
@@ -74,7 +73,6 @@ function stageBadge(stage: string) {
 
 function ConvRow({ conv }: { conv: ConversationWithMessages }) {
   const [expanded, setExpanded] = useState(false);
-  const [, navigate] = useLocation();
   const messages: any[] = conv.messages || [];
   const lastMsg = messages[messages.length - 1];
   const frustration = getFrustrationScore(messages);
@@ -139,7 +137,7 @@ function ConvRow({ conv }: { conv: ConversationWithMessages }) {
             {conv.customerCompany && <span className="flex items-center gap-1"><Building className="w-3 h-3" />{conv.customerCompany}</span>}
             {conv.deliveryAddress && <span className="flex items-center gap-1">📍 {conv.deliveryAddress}</span>}
             <span className="ml-auto">
-              <button onClick={() => navigate(`/conversations/${conv.id}`)} className="text-primary hover:underline text-xs">
+              <button onClick={() => { window.location.hash = `/conversations/${conv.id}`; }} className="text-primary hover:underline text-xs">
                 Open full view →
               </button>
             </span>
