@@ -505,7 +505,24 @@ export function registerRoutes(httpServer: Server, app: Express) {
         const LOOKS_GOOD = /^(looks? good|confirmed?|correct|yes|yep|yeah|ok|okay|approve[d]?|good|perfect|that'?s? (correct|right|good))[\.!]?$/i;
         const CORRECTION = /^(correction|wrong|no|change|fix|incorrect|mistake|error)s?[\.!]?$/i;
 
-        if (LOOKS_GOOD.test(cleanBody.trim())) {
+        // Safety check: only fire the LOOKS_GOOD shortcut if the last bot message
+        // was actually an invoice review (contains "Invoice #" and "LOOKS GOOD").
+        // If the bot's last message was a new price quote (contains "Shall I"),
+        // the customer's "yes" is confirming a NEW order, not the old invoice.
+        const allMsgs = await storage.getMessages(conv.id);
+        const lastBotMsg = [...allMsgs].reverse().find(m => m.direction === "outbound");
+        const lastBotWasInvoiceReview = lastBotMsg &&
+          /Invoice #\d+ is ready/i.test(lastBotMsg.body) &&
+          /LOOKS GOOD/i.test(lastBotMsg.body);
+
+        // If the last bot message was NOT an invoice review, the customer has
+        // moved on to a new order — reset stage so the flow works correctly.
+        if (!lastBotWasInvoiceReview) {
+          console.log(`[Stage] invoice_review but last bot msg is not a review — resetting to "ordering" (conv ${conv.id})`);
+          conv = await storage.updateConversation(conv.id, { stage: "ordering", pendingImagesJson: null });
+        }
+
+        if (LOOKS_GOOD.test(cleanBody.trim()) && lastBotWasInvoiceReview) {
           // Retrieve stored payment data
           let paymentLink: string | null = null;
           let invoiceNumber = "";
