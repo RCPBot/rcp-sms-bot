@@ -2081,6 +2081,24 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
     }
   });
 
+  // ── /api/chat-proxy — forward chat requests to ai.rebarconcreteproducts.com ──
+  // Used by the /chat-widget iframe so the fetch stays same-origin (Railway)
+  // which already has CORS configured for the Shopify storefront.
+  app.post("/api/chat-proxy", express.json(), async (req, res) => {
+    try {
+      const upstream = await fetch("https://ai.rebarconcreteproducts.com/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(req.body),
+      });
+      const data = await upstream.json();
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.json(data);
+    } catch (err: any) {
+      res.status(502).json({ error: "Chat proxy error: " + err.message });
+    }
+  });
+
   // ── /chat-widget — standalone RCP AI chat panel (no proxy, no external page) ──
   app.get("/chat-widget", (_req, res) => {
     const html = `<!DOCTYPE html>
@@ -2253,7 +2271,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
   </div>
 
   <script>
-    const API = 'https://ai.rebarconcreteproducts.com/api/chat';
+    const API = '/api/chat-proxy';
     const messagesEl = document.getElementById('messages');
     const inputEl    = document.getElementById('user-input');
     const sendBtn    = document.getElementById('send-btn');
