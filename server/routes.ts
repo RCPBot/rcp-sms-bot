@@ -2081,144 +2081,289 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
     }
   });
 
-  // ── /chat-widget — chat-only view (no hero/ads) for iframe embeds ──
-  app.get("/chat-widget", async (_req, res) => {
-    try {
-      const upstream = await fetch("https://ai.rebarconcreteproducts.com");
-      let html = await upstream.text();
+  // ── /chat-widget — standalone RCP AI chat panel (no proxy, no external page) ──
+  app.get("/chat-widget", (_req, res) => {
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RCP AI Assistant</title>
+  <link rel="preconnect" href="https://api.fontshare.com" />
+  <link href="https://api.fontshare.com/v2/css?f[]=general-sans@400,500,600&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      height: 100%;
+      background: #0f0f0f;
+      color: #e8e8e8;
+      font-family: 'General Sans', system-ui, sans-serif;
+      font-size: 14px;
+      overflow: hidden;
+    }
+    #chat-root {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      max-height: 100vh;
+    }
+    /* ── Header bar ── */
+    #chat-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      background: #1a1a1a;
+      border-bottom: 1px solid #2a2a2a;
+      flex-shrink: 0;
+    }
+    #chat-header .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #C8D400;
+      flex-shrink: 0;
+    }
+    #chat-header span {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      color: #C8D400;
+      text-transform: uppercase;
+    }
+    /* ── Message list ── */
+    #messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      scroll-behavior: smooth;
+    }
+    #messages::-webkit-scrollbar { width: 4px; }
+    #messages::-webkit-scrollbar-track { background: transparent; }
+    #messages::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+    .msg {
+      display: flex;
+      flex-direction: column;
+      max-width: 88%;
+    }
+    .msg.user { align-self: flex-end; align-items: flex-end; }
+    .msg.bot  { align-self: flex-start; align-items: flex-start; }
+    .bubble {
+      padding: 9px 13px;
+      border-radius: 14px;
+      line-height: 1.5;
+      font-size: 13.5px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .msg.user .bubble {
+      background: #C8D400;
+      color: #16161d;
+      border-bottom-right-radius: 4px;
+      font-weight: 500;
+    }
+    .msg.bot .bubble {
+      background: #1e1e1e;
+      color: #e0e0e0;
+      border: 1px solid #2e2e2e;
+      border-bottom-left-radius: 4px;
+    }
+    .typing-dot {
+      display: inline-block;
+      width: 6px; height: 6px;
+      background: #666;
+      border-radius: 50%;
+      margin: 0 2px;
+      animation: blink 1.2s infinite;
+    }
+    .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+    .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes blink {
+      0%, 80%, 100% { opacity: 0.2; transform: scale(0.85); }
+      40% { opacity: 1; transform: scale(1); }
+    }
+    /* ── Input area ── */
+    #input-area {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+      padding: 10px 12px;
+      background: #1a1a1a;
+      border-top: 1px solid #2a2a2a;
+      flex-shrink: 0;
+    }
+    #user-input {
+      flex: 1;
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 10px;
+      color: #e8e8e8;
+      font-family: inherit;
+      font-size: 13.5px;
+      line-height: 1.4;
+      padding: 8px 12px;
+      resize: none;
+      max-height: 120px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    #user-input:focus { border-color: #C8D400; }
+    #user-input::placeholder { color: #555; }
+    #send-btn {
+      flex-shrink: 0;
+      width: 36px; height: 36px;
+      border-radius: 10px;
+      border: none;
+      background: #C8D400;
+      color: #16161d;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s, transform 0.1s;
+    }
+    #send-btn:hover { background: #d4e000; }
+    #send-btn:active { transform: scale(0.93); }
+    #send-btn:disabled { background: #333; color: #555; cursor: not-allowed; transform: none; }
+    #send-btn svg { width: 16px; height: 16px; }
+  </style>
+</head>
+<body>
+  <div id="chat-root">
+    <div id="chat-header">
+      <div class="dot"></div>
+      <span>RCP AI Assistant</span>
+    </div>
+    <div id="messages">
+      <div class="msg bot">
+        <div class="bubble">Hi! I'm the RCP AI assistant. Ask me anything about rebar pricing, delivery, estimating, or to get a takeoff started.</div>
+      </div>
+    </div>
+    <div id="input-area">
+      <textarea id="user-input" rows="1" placeholder="Ask about pricing, delivery, estimating…" maxlength="2000"></textarea>
+      <button id="send-btn" title="Send">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="22" y1="2" x2="11" y2="13"></line>
+          <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+        </svg>
+      </button>
+    </div>
+  </div>
 
-      const WIDGET_SCRIPT = `<script>
-    // Prevent iframe from scrolling parent
-    (function() {
-      var origFocus = HTMLElement.prototype.focus;
-      HTMLElement.prototype.focus = function(opts) {
-        origFocus.call(this, { preventScroll: true });
-      };
-      document.addEventListener('focus', function(e) {
-        if (e.target && (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT')) {
-          var x = window.scrollX, y = window.scrollY;
-          setTimeout(function() { window.scrollTo(x, y); }, 0);
+  <script>
+    const API = 'https://ai.rebarconcreteproducts.com/api/chat';
+    const messagesEl = document.getElementById('messages');
+    const inputEl    = document.getElementById('user-input');
+    const sendBtn    = document.getElementById('send-btn');
+    let history = [];
+    let busy = false;
+
+    function scrollBottom() {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function addBubble(role, text) {
+      const wrap = document.createElement('div');
+      wrap.className = 'msg ' + role;
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      bubble.textContent = text;
+      wrap.appendChild(bubble);
+      messagesEl.appendChild(wrap);
+      scrollBottom();
+      return bubble;
+    }
+
+    function showTyping() {
+      const wrap = document.createElement('div');
+      wrap.className = 'msg bot';
+      wrap.id = 'typing-indicator';
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      bubble.innerHTML = '<span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span>';
+      wrap.appendChild(bubble);
+      messagesEl.appendChild(wrap);
+      scrollBottom();
+    }
+
+    function removeTyping() {
+      const el = document.getElementById('typing-indicator');
+      if (el) el.remove();
+    }
+
+    async function sendMessage() {
+      if (busy) return;
+      const text = inputEl.value.trim();
+      if (!text) return;
+
+      inputEl.value = '';
+      inputEl.style.height = 'auto';
+      busy = true;
+      sendBtn.disabled = true;
+
+      addBubble('user', text);
+      history.push({ role: 'user', content: text });
+      showTyping();
+
+      try {
+        const resp = await fetch(API, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages: history, imageBase64: null, imageMediaType: null })
+        });
+
+        removeTyping();
+
+        if (!resp.ok) {
+          addBubble('bot', 'Sorry, something went wrong (' + resp.status + '). Please try again.');
+        } else {
+          const data = await resp.json();
+          const reply = (data && (data.reply || data.message || data.content || data.text)) || 'No response received.';
+          addBubble('bot', reply);
+          history.push({ role: 'assistant', content: reply });
         }
-      }, true);
-    })();
+      } catch (err) {
+        removeTyping();
+        addBubble('bot', 'Connection error — please check your network and try again.');
+      }
 
-    // postMessage listener for prompt injection
+      busy = false;
+      sendBtn.disabled = false;
+      inputEl.focus();
+    }
+
+    inputEl.addEventListener('input', function() {
+      this.style.height = 'auto';
+      this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+    });
+
+    inputEl.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+
+    sendBtn.addEventListener('click', sendMessage);
+
     window.addEventListener('message', function(e) {
       if (!e.data || e.data.type !== 'rcp-prompt') return;
-      var prompt = e.data.text;
-      if (!prompt) return;
-      function tryInject(attempts) {
-        var ta = document.querySelector('textarea');
-        if (!ta && attempts > 0) { setTimeout(function(){ tryInject(attempts - 1); }, 200); return; }
-        if (!ta) return;
-        var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-        nativeInputValueSetter.call(ta, prompt);
-        ta.dispatchEvent(new Event('input', { bubbles: true }));
-        ta.dispatchEvent(new Event('change', { bubbles: true }));
-        ta.focus({ preventScroll: true });
-        setTimeout(function() {
-          ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
-          setTimeout(function() {
-            if (ta.value && ta.value.trim()) {
-              var btns = document.querySelectorAll('button');
-              if (btns[btns.length - 1]) btns[btns.length - 1].click();
-            }
-          }, 200);
-        }, 300);
+      if (e.data.text) {
+        inputEl.value = e.data.text;
+        inputEl.dispatchEvent(new Event('input'));
+        sendMessage();
       }
-      tryInject(20);
     });
 
-    // Auto-click the AI Assistant tab and hide everything else
-    function activateChatTab() {
-      // Find and click the AI Assistant tab button
-      var buttons = document.querySelectorAll('button');
-      for (var i = 0; i < buttons.length; i++) {
-        if (buttons[i].textContent && buttons[i].textContent.trim().match(/AI Assistant|Chat/i)) {
-          buttons[i].click();
-          break;
-        }
-      }
-    }
-    // Try immediately and after a short delay for React hydration
-    document.addEventListener('DOMContentLoaded', function() {
-      setTimeout(activateChatTab, 300);
-      setTimeout(activateChatTab, 800);
-    });
-  <\/script>`;
-
-      const HIDE_CSS = `<style>
-    /* ── Widget mode: hide everything above the chat panel ── */
-    body { overflow: hidden !important; background: #0a0a0a !important; }
-    /* Hide the site header (logo + phone bar) */
-    header { display: none !important; }
-    /* Hide the lime accent bar below the header */
-    header + div { display: none !important; }
-    /* Hide the review/rating strip */
-    header ~ div[class*="border-y"] { display: none !important; }
-    /* Hide the hero section */
-    section { display: none !important; }
-    /* Hide the tab switcher row (Instant Takeoff / AI Assistant) */
-    div[class*="rounded-xl"][class*="border-white"][class*="p-1"][class*="max-w-sm"] { display: none !important; }
-    /* Hide the tagline below tabs */
-    section + div > div > p { display: none !important; }
-    /* Root fills iframe */
-    html, body, #root { height: 100% !important; }
-    #root > div { min-height: 100% !important; }
-    /* The bg-black chat wrapper fills remaining space */
-    div.bg-black.flex-1 { flex: 1 1 auto !important; display: flex !important; flex-direction: column !important; min-height: 100vh !important; }
-  </style>`;
-
-      // Rewrite relative asset paths to absolute URLs on ai.rebarconcreteproducts.com
-      // This bypasses Railway CDN cache for JS/CSS assets
-      html = html.replace(/src="\.\//g, 'src="https://ai.rebarconcreteproducts.com/');
-      html = html.replace(/href="\.\//g, 'href="https://ai.rebarconcreteproducts.com/');
-      html = html.replace('</head>', HIDE_CSS + '\n</head>');
-      html = html.replace('</body>', WIDGET_SCRIPT + '\n</body>');
-
-      res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.setHeader('X-Frame-Options', 'ALLOWALL');
-      res.setHeader('Content-Security-Policy', '');
-      res.send(html);
-    } catch (err: any) {
-      res.status(502).send('Chat widget unavailable: ' + (err as Error).message);
-    }
-  });
-
-  // ── /assets/* proxy — forward asset requests to ai.rebarconcreteproducts.com ──
-  // Needed because the /chat page loads JS/CSS as relative './assets/*' which resolves
-  // to this origin. We proxy them through to avoid CORS blocks.
-  app.get('/assets/:file', async (req, res) => {
-    const file = req.params.file;
-    try {
-      const upstream = await fetch(`https://ai.rebarconcreteproducts.com/assets/${file}`);
-      if (!upstream.ok) { res.status(upstream.status).end(); return; }
-      const buf = await upstream.arrayBuffer();
-      // Hardcode content-type by extension — upstream CDN may return wrong type
-      let contentType = 'application/octet-stream';
-      if (file.endsWith('.js')) contentType = 'application/javascript; charset=utf-8';
-      else if (file.endsWith('.css')) contentType = 'text/css; charset=utf-8';
-      else if (file.endsWith('.woff2')) contentType = 'font/woff2';
-      else if (file.endsWith('.woff')) contentType = 'font/woff';
-      else if (file.endsWith('.png')) contentType = 'image/png';
-      else if (file.endsWith('.svg')) contentType = 'image/svg+xml';
-      res.setHeader('Content-Type', contentType);
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-      res.send(Buffer.from(buf));
-    } catch (err: any) {
-      res.status(502).end();
-    }
-  });
-
-  // Also proxy logoheader.jpg and favicon.png used by the upstream app
-  app.get('/logoheader.jpg', async (_req, res) => {
-    try {
-      const upstream = await fetch('https://ai.rebarconcreteproducts.com/logoheader.jpg');
-      const buf = await upstream.arrayBuffer();
-      res.setHeader('Content-Type', 'image/jpeg');
-      res.setHeader('Cache-Control', 'public, max-age=86400');
-      res.send(Buffer.from(buf));
-    } catch { res.status(502).end(); }
+    inputEl.focus();
+  <\/script>
+</body>
+</html>`;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('X-Frame-Options', 'ALLOWALL');
+    res.setHeader('Content-Security-Policy', '');
+    res.send(html);
   });
 }
