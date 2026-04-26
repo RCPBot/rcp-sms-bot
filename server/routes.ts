@@ -2148,21 +2148,25 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
   <\/script>`;
 
       const HIDE_CSS = `<style>
-    /* Hide everything except the chat panel */
-    body { overflow: hidden !important; }
-    /* Hide hero section, header, ads, rating widgets, tab bar container */
-    body > * { display: none !important; }
-    /* Only show the root app */
-    body > #root, body > [id="root"] { display: block !important; }
-    /* Hide hero/landing content — show only chat widget pane */
-    [class*="hero"], [class*="Hero"], [class*="landing"], [class*="Landing"],
-    [class*="header"], [class*="Header"], [class*="banner"], [class*="Banner"],
-    [class*="promo"], [class*="rating"], [class*="Rating"], [class*="review"],
-    [class*="takeover"], [class*="Takeover"] { display: none !important; }
-    /* Hide tab navigation bar at the bottom */
-    [class*="tab-bar"], [class*="TabBar"], [class*="bottom-nav"], [class*="BottomNav"] { display: none !important; }
-    /* Make root fill the whole iframe */
-    #root { height: 100vh !important; width: 100vw !important; overflow: hidden !important; }
+    /* ── Widget mode: hide everything above the chat panel ── */
+    body { overflow: hidden !important; background: #0a0a0a !important; }
+    /* Hide the site header (logo + phone bar) */
+    header { display: none !important; }
+    /* Hide the lime accent bar below the header */
+    header + div { display: none !important; }
+    /* Hide the review/rating strip */
+    header ~ div[class*="border-y"] { display: none !important; }
+    /* Hide the hero section */
+    section { display: none !important; }
+    /* Hide the tab switcher row (Instant Takeoff / AI Assistant) */
+    div[class*="rounded-xl"][class*="border-white"][class*="p-1"][class*="max-w-sm"] { display: none !important; }
+    /* Hide the tagline below tabs */
+    section + div > div > p { display: none !important; }
+    /* Root fills iframe */
+    html, body, #root { height: 100% !important; }
+    #root > div { min-height: 100% !important; }
+    /* The bg-black chat wrapper fills remaining space */
+    div.bg-black.flex-1 { flex: 1 1 auto !important; display: flex !important; flex-direction: column !important; min-height: 100vh !important; }
   </style>`;
 
       html = html.replace('</head>', HIDE_CSS + '\n</head>');
