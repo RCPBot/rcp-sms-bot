@@ -453,7 +453,7 @@ export async function getOrCreateBotCustomer(): Promise<string> {
 // ── Create invoice in QBO ─────────────────────────────────────────────────────
 export async function createInvoice(params: {
   customerId: string;
-  customerEmail: string;
+  customerEmail?: string;
   lineItems: LineItem[];
   deliveryFee?: number;
   deliveryMiles?: number;
@@ -494,8 +494,7 @@ export async function createInvoice(params: {
   const invoiceBody: Record<string, any> = {
     ...(docNumber ? { DocNumber: docNumber } : {}),
     CustomerRef: { value: params.customerId },
-    BillEmail: { Address: params.customerEmail },
-    EmailStatus: "NeedToSend",
+    ...(params.customerEmail ? { BillEmail: { Address: params.customerEmail }, EmailStatus: "NeedToSend" } : { EmailStatus: "NotSet" }),
     Line: lines,
     DueDate: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0],
   };
@@ -528,7 +527,7 @@ export async function createInvoice(params: {
 // ── Create estimate in QBO ───────────────────────────────────────────────────
 export async function createEstimate(params: {
   customerId: string;
-  customerEmail: string;
+  customerEmail?: string;
   lineItems: import("@shared/schema").LineItem[];
   customerMemo?: string;
   deliveryAddress?: string;
@@ -550,8 +549,7 @@ export async function createEstimate(params: {
   const estimateBody: Record<string, any> = {
     ...(docNumber ? { DocNumber: docNumber } : {}),
     CustomerRef: { value: params.customerId },
-    BillEmail: { Address: params.customerEmail },
-    EmailStatus: "NeedToSend",
+    ...(params.customerEmail ? { BillEmail: { Address: params.customerEmail }, EmailStatus: "NeedToSend" } : { EmailStatus: "NotSet" }),
     TxnStatus: "Pending",
     Line: lines,
     ExpirationDate: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0],
