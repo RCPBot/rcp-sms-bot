@@ -509,7 +509,22 @@ export async function createInvoice(params: {
     };
   }
 
-  const data = await qboPostWithDocRetry("/invoice", invoiceBody);
+  let data: any;
+  try {
+    data = await qboPostWithDocRetry("/invoice", invoiceBody);
+  } catch (err: any) {
+    // QBO error 6000: customer has email-statements required but no email on file.
+    // Retry with email fields completely removed.
+    const is6000 = err?.message?.includes("6000") || err?.message?.includes("email address for this customer");
+    if (is6000) {
+      console.warn("[QBO] Error 6000 — retrying invoice without BillEmail/EmailStatus");
+      const { BillEmail: _be, EmailStatus: _es, ...bodyNoEmail } = invoiceBody;
+      bodyNoEmail.EmailStatus = "NotSet";
+      data = await qboPostWithDocRetry("/invoice", bodyNoEmail);
+    } else {
+      throw err;
+    }
+  }
   const invoice = data.Invoice;
 
   // Get shareable invoice link (include=invoiceLink, no QBO Payments required)
