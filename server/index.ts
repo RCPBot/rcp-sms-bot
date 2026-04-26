@@ -9,6 +9,23 @@ import { initQboToken } from "./qbo";
 const app = express();
 const httpServer = createServer(app);
 
+// CORS — allow Shopify storefront to call /api/qbo/items
+const ALLOWED_ORIGINS = [
+  'https://rebarconcreteproducts.com',
+  'https://www.rebarconcreteproducts.com',
+  'https://rebarconcreteproducts.myshopify.com',
+];
+app.use((req, res, next) => {
+  const origin = req.headers.origin as string;
+  if (ALLOWED_ORIGINS.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
 declare module "http" {
   interface IncomingMessage {
     rawBody: unknown;
