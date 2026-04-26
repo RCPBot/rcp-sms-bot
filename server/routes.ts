@@ -2169,6 +2169,10 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
     div.bg-black.flex-1 { flex: 1 1 auto !important; display: flex !important; flex-direction: column !important; min-height: 100vh !important; }
   </style>`;
 
+      // Rewrite relative asset paths to absolute URLs on ai.rebarconcreteproducts.com
+      // This bypasses Railway CDN cache for JS/CSS assets
+      html = html.replace(/src="\.\//g, 'src="https://ai.rebarconcreteproducts.com/');
+      html = html.replace(/href="\.\//g, 'href="https://ai.rebarconcreteproducts.com/');
       html = html.replace('</head>', HIDE_CSS + '\n</head>');
       html = html.replace('</body>', WIDGET_SCRIPT + '\n</body>');
 
