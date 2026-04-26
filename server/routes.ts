@@ -2185,13 +2185,19 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
   // Needed because the /chat page loads JS/CSS as relative './assets/*' which resolves
   // to this origin. We proxy them through to avoid CORS blocks.
   app.get('/assets/:file', async (req, res) => {
-    // Only proxy if it looks like a hashed Vite asset (not an internal static file)
     const file = req.params.file;
     try {
       const upstream = await fetch(`https://ai.rebarconcreteproducts.com/assets/${file}`);
       if (!upstream.ok) { res.status(upstream.status).end(); return; }
-      const contentType = upstream.headers.get('content-type') || 'application/octet-stream';
       const buf = await upstream.arrayBuffer();
+      // Hardcode content-type by extension — upstream CDN may return wrong type
+      let contentType = 'application/octet-stream';
+      if (file.endsWith('.js')) contentType = 'application/javascript; charset=utf-8';
+      else if (file.endsWith('.css')) contentType = 'text/css; charset=utf-8';
+      else if (file.endsWith('.woff2')) contentType = 'font/woff2';
+      else if (file.endsWith('.woff')) contentType = 'font/woff';
+      else if (file.endsWith('.png')) contentType = 'image/png';
+      else if (file.endsWith('.svg')) contentType = 'image/svg+xml';
       res.setHeader('Content-Type', contentType);
       res.setHeader('Access-Control-Allow-Origin', '*');
       res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
