@@ -2081,6 +2081,102 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
     }
   });
 
+  // ── /chat-widget — chat-only view (no hero/ads) for iframe embeds ──
+  app.get("/chat-widget", async (_req, res) => {
+    try {
+      const upstream = await fetch("https://ai.rebarconcreteproducts.com");
+      let html = await upstream.text();
+
+      const WIDGET_SCRIPT = `<script>
+    // Prevent iframe from scrolling parent
+    (function() {
+      var origFocus = HTMLElement.prototype.focus;
+      HTMLElement.prototype.focus = function(opts) {
+        origFocus.call(this, { preventScroll: true });
+      };
+      document.addEventListener('focus', function(e) {
+        if (e.target && (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT')) {
+          var x = window.scrollX, y = window.scrollY;
+          setTimeout(function() { window.scrollTo(x, y); }, 0);
+        }
+      }, true);
+    })();
+
+    // postMessage listener for prompt injection
+    window.addEventListener('message', function(e) {
+      if (!e.data || e.data.type !== 'rcp-prompt') return;
+      var prompt = e.data.text;
+      if (!prompt) return;
+      function tryInject(attempts) {
+        var ta = document.querySelector('textarea');
+        if (!ta && attempts > 0) { setTimeout(function(){ tryInject(attempts - 1); }, 200); return; }
+        if (!ta) return;
+        var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+        nativeInputValueSetter.call(ta, prompt);
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+        ta.dispatchEvent(new Event('change', { bubbles: true }));
+        ta.focus({ preventScroll: true });
+        setTimeout(function() {
+          ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+          setTimeout(function() {
+            if (ta.value && ta.value.trim()) {
+              var btns = document.querySelectorAll('button');
+              if (btns[btns.length - 1]) btns[btns.length - 1].click();
+            }
+          }, 200);
+        }, 300);
+      }
+      tryInject(20);
+    });
+
+    // Auto-click the AI Assistant tab and hide everything else
+    function activateChatTab() {
+      // Find and click the AI Assistant tab button
+      var buttons = document.querySelectorAll('button');
+      for (var i = 0; i < buttons.length; i++) {
+        if (buttons[i].textContent && buttons[i].textContent.trim().match(/AI Assistant|Chat/i)) {
+          buttons[i].click();
+          break;
+        }
+      }
+    }
+    // Try immediately and after a short delay for React hydration
+    document.addEventListener('DOMContentLoaded', function() {
+      setTimeout(activateChatTab, 300);
+      setTimeout(activateChatTab, 800);
+    });
+  <\/script>`;
+
+      const HIDE_CSS = `<style>
+    /* Hide everything except the chat panel */
+    body { overflow: hidden !important; }
+    /* Hide hero section, header, ads, rating widgets, tab bar container */
+    body > * { display: none !important; }
+    /* Only show the root app */
+    body > #root, body > [id="root"] { display: block !important; }
+    /* Hide hero/landing content — show only chat widget pane */
+    [class*="hero"], [class*="Hero"], [class*="landing"], [class*="Landing"],
+    [class*="header"], [class*="Header"], [class*="banner"], [class*="Banner"],
+    [class*="promo"], [class*="rating"], [class*="Rating"], [class*="review"],
+    [class*="takeover"], [class*="Takeover"] { display: none !important; }
+    /* Hide tab navigation bar at the bottom */
+    [class*="tab-bar"], [class*="TabBar"], [class*="bottom-nav"], [class*="BottomNav"] { display: none !important; }
+    /* Make root fill the whole iframe */
+    #root { height: 100vh !important; width: 100vw !important; overflow: hidden !important; }
+  </style>`;
+
+      html = html.replace('</head>', HIDE_CSS + '\n</head>');
+      html = html.replace('</body>', WIDGET_SCRIPT + '\n</body>');
+
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('X-Frame-Options', 'ALLOWALL');
+      res.setHeader('Content-Security-Policy', '');
+      res.send(html);
+    } catch (err: any) {
+      res.status(502).send('Chat widget unavailable: ' + (err as Error).message);
+    }
+  });
+
   // ── /assets/* proxy — forward asset requests to ai.rebarconcreteproducts.com ──
   // Needed because the /chat page loads JS/CSS as relative './assets/*' which resolves
   // to this origin. We proxy them through to avoid CORS blocks.
