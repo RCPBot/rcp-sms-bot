@@ -2119,7 +2119,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
     #send-btn:hover { background: #d4e000; }
     #send-btn:active { transform: scale(0.93); }
     #send-btn:disabled { background: #333; color: #555; cursor: not-allowed; transform: none; }
-    #send-btn svg { width: 16px; height: 16px; }
+    #send-btn svg { width: 16px; height: 16px; stroke: #16161d !important; }
   </style>
 </head>
 <body>
@@ -2136,7 +2136,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
     <div id="input-area">
       <textarea id="user-input" rows="1" placeholder="Ask about pricing, delivery, estimating…" maxlength="2000"></textarea>
       <button id="send-btn" title="Send">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#16161d" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="22" y1="2" x2="11" y2="13"></line>
           <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
         </svg>
@@ -2360,7 +2360,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
     #send-btn:hover { background: #d4e000; }
     #send-btn:active { transform: scale(0.93); }
     #send-btn:disabled { background: #333; color: #555; cursor: not-allowed; transform: none; }
-    #send-btn svg { width: 16px; height: 16px; }
+    #send-btn svg { width: 16px; height: 16px; stroke: #16161d !important; }
   </style>
 </head>
 <body>
@@ -2377,7 +2377,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
     <div id="input-area">
       <textarea id="user-input" rows="1" placeholder="Ask about pricing, delivery, estimating…" maxlength="2000"></textarea>
       <button id="send-btn" title="Send">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#16161d" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="22" y1="2" x2="11" y2="13"></line>
           <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
         </svg>
