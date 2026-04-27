@@ -312,42 +312,104 @@ export async function calcDeliveryFee(destinationAddress: string): Promise<{
 
 // ── Find existing QBO customer only (no create) ─────────────────────────────
 // Used for web orders — only existing customers can invoice to prevent fraud.
-// Verifies by account name + phone number match.
+// Pass 1: match by phone alone (most reliable).
+// Pass 2: fuzzy name match on the phone-matched record (tolerates typos).
+// Pass 3: fuzzy name across all customers when phone not on file.
 export async function findExistingCustomer(params: {
   name: string;
   phone: string;
   email?: string;
 }): Promise<string | null> {
-  // Normalize phone to digits only for comparison
   const normalizePhone = (p: string) => p.replace(/\D/g, "");
   const inputPhone = normalizePhone(params.phone);
 
-  // Search by display name, then verify phone matches
+  // Simple Levenshtein for fuzzy name comparison
+  function levenshtein(a: string, b: string): number {
+    const m = a.length, n = b.length;
+    const dp: number[][] = Array.from({ length: m + 1 }, (_, i) =>
+      Array.from({ length: n + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0))
+    );
+    for (let i = 1; i <= m; i++)
+      for (let j = 1; j <= n; j++)
+        dp[i][j] = a[i-1] === b[j-1]
+          ? dp[i-1][j-1]
+          : 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
+    return dp[m][n];
+  }
+
+  // Normalize a name for comparison: lowercase, strip punctuation/extra spaces
+  function normName(s: string): string {
+    return s.toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
+  }
+
+  // Returns true if names are close enough: exact, or edit distance ≤ 2
+  // AND the shorter name is at least 4 chars (avoids false positives on short names)
+  function nameMatches(input: string, qbo: string): boolean {
+    const a = normName(input);
+    const b = normName(qbo);
+    if (a === b) return true;
+    // Also check if input is contained in the QBO name or vice versa (handles company suffixes)
+    if (b.includes(a) || a.includes(b)) return true;
+    const dist = levenshtein(a, b);
+    const minLen = Math.min(a.length, b.length);
+    // Allow 1 edit per ~6 chars, capped at 3 edits total
+    const threshold = Math.min(3, Math.floor(minLen / 6) + 1);
+    return dist <= threshold;
+  }
+
   try {
-    const encoded = encodeURIComponent(`SELECT * FROM Customer WHERE DisplayName = '${params.name}'`);
+    // Fetch all active customers once
+    const encoded = encodeURIComponent(`SELECT * FROM Customer WHERE Active = true MAXRESULTS 500`);
     const data = await qboGet(`/query?query=${encoded}`);
-    const customers = data.QueryResponse?.Customer || [];
-    for (const customer of customers) {
-      const qboPhone = normalizePhone(customer.PrimaryPhone?.FreeFormNumber || "");
-      // Match if last 10 digits align (handles country code variations)
-      if (qboPhone && inputPhone && qboPhone.slice(-10) === inputPhone.slice(-10)) {
-        // Optionally update email on the record if provided and missing
-        if (params.email && !customer.PrimaryEmailAddr?.Address) {
-          try {
-            await qboPost("/customer", {
-              Id: customer.Id,
-              SyncToken: customer.SyncToken,
-              sparse: true,
-              PrimaryEmailAddr: { Address: params.email },
-            });
-          } catch (_) {}
+    const customers: any[] = data.QueryResponse?.Customer || [];
+
+    // ── Pass 1: phone match + fuzzy name ────────────────────────────────────
+    if (inputPhone.length >= 7) {
+      for (const c of customers) {
+        const qboPhone = normalizePhone(c.PrimaryPhone?.FreeFormNumber || c.Mobile?.FreeFormNumber || "");
+        if (!qboPhone) continue;
+        const phoneMatch = qboPhone.slice(-10) === inputPhone.slice(-10);
+        if (!phoneMatch) continue;
+        // Phone matched — accept even if name has a small typo
+        const qboName = c.DisplayName || c.FullyQualifiedName || "";
+        if (nameMatches(params.name, qboName)) {
+          console.log(`[QBO] findExistingCustomer: phone+fuzzyName match → "${qboName}" for input "${params.name}"`);
+          if (params.email && !c.PrimaryEmailAddr?.Address) {
+            try {
+              await qboPost("/customer", {
+                Id: c.Id, SyncToken: c.SyncToken, sparse: true,
+                PrimaryEmailAddr: { Address: params.email },
+              });
+            } catch (_) {}
+          }
+          return c.Id;
         }
-        return customer.Id;
+        // Phone matched but name is very different — still allow if within 3 edits
+        // (covers cases where customer used their company name vs personal name)
+        const dist = levenshtein(normName(params.name), normName(qboName));
+        if (dist <= 3) {
+          console.log(`[QBO] findExistingCustomer: phone match + loose name (dist=${dist}) → "${qboName}" for input "${params.name}"`);
+          return c.Id;
+        }
       }
     }
-  } catch (_) {}
 
-  return null; // Not found or phone didn't match — do not create
+    // ── Pass 2: name-only fuzzy match (no phone on file) ────────────────────
+    for (const c of customers) {
+      const qboName = c.DisplayName || c.FullyQualifiedName || "";
+      if (!nameMatches(params.name, qboName)) continue;
+      // Require at least the email to match if no phone
+      const qboEmail = (c.PrimaryEmailAddr?.Address || "").toLowerCase();
+      if (params.email && qboEmail && qboEmail === params.email.toLowerCase()) {
+        console.log(`[QBO] findExistingCustomer: fuzzyName+email match → "${qboName}"`);
+        return c.Id;
+      }
+    }
+  } catch (err: any) {
+    console.error(`[QBO] findExistingCustomer failed:`, err?.message);
+  }
+
+  return null; // Not found — do not create
 }
 
 // ── Find or create a QBO customer ────────────────────────────────────────────
