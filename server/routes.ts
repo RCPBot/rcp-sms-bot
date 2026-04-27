@@ -8,6 +8,7 @@ import { syncProducts, findOrCreateCustomer, findExistingCustomer, createInvoice
 import { performTakeoff } from "./takeoff";
 import { resolveLinksFromText, extractUrls } from "./link-resolver";
 import { generateCutSheetPdf, emailCutSheet, emailCutSheetToCustomer, generatePlacementDrawingPdf, forwardPlansToOffice, generateBidPdf, emailBidPdf, OFFICE_EMAIL } from "./cutsheet";
+import { sendDailyDigest } from "./digest";
 import type { LineItem } from "@shared/schema";
 import * as fs from "fs";
 import * as path from "path";
@@ -2655,6 +2656,17 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
     res.setHeader('X-Frame-Options', 'ALLOWALL');
     res.setHeader('Content-Security-Policy', '');
     res.send(html);
+  });
+
+  // ── /api/admin/digest — trigger daily digest manually or via cron ──────────
+  app.post("/api/admin/digest", async (_req, res) => {
+    try {
+      const result = await sendDailyDigest();
+      res.json(result);
+    } catch (err: any) {
+      console.error("[Digest] Error sending digest:", err);
+      res.status(500).json({ sent: false, error: err.message });
+    }
   });
 }
 
