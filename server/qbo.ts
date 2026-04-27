@@ -196,11 +196,6 @@ async function qboPostWithDocRetry(path: string, body: Record<string, any>): Pro
 
 // ── Sync products/services from QBO ──────────────────────────────────────────
 // Returns all active QBO items with live pricing — used by /api/qbo/items
-export async function qboQuery(sql: string): Promise<any> {
-  const encoded = encodeURIComponent(sql);
-  return qboGet(`/query?query=${encoded}&minorversion=75`);
-}
-
 export async function getQboItems(): Promise<Array<{
   id: string; name: string; description: string | null;
   unitPrice: number | null; type: string; active: boolean;

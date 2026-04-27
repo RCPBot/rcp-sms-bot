@@ -4,7 +4,7 @@ import express from "express";
 import { storage } from "./storage";
 import { sendSms, isTwilioConfigured, sendPaymentLinkEmail } from "./sms";
 import { processMessage, extractOrderFromConversation, extractCustomerInfo, isAiConfigured } from "./ai";
-import { syncProducts, findOrCreateCustomer, findExistingCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice, updateRailwayEnvVar, setLiveRefreshToken, getOrCreateBotCustomer, getQboItems, qboQuery } from "./qbo";
+import { syncProducts, findOrCreateCustomer, findExistingCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice, updateRailwayEnvVar, setLiveRefreshToken, getOrCreateBotCustomer, getQboItems } from "./qbo";
 import { performTakeoff } from "./takeoff";
 import { resolveLinksFromText, extractUrls } from "./link-resolver";
 import { generateCutSheetPdf, emailCutSheet, emailCutSheetToCustomer, generatePlacementDrawingPdf, forwardPlansToOffice, generateBidPdf, emailBidPdf, OFFICE_EMAIL } from "./cutsheet";
@@ -191,50 +191,6 @@ export function registerRoutes(httpServer: Server, app: Express) {
       }
       const items = await getQboItems();
       res.json({ count: items.length, items, fetchedAt: new Date().toISOString() });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  app.get('/api/qbo/delivery-count', async (_req, res) => {
-    try {
-      if (!isQboConfigured()) return res.status(503).json({ error: 'QBO not configured' });
-      // Page through all invoices (QBO max 1000 per query)
-      let startPos = 1;
-      const pageSize = 1000;
-      let allInvoices: any[] = [];
-      while (true) {
-        const data = await qboQuery(`SELECT * FROM Invoice STARTPOSITION ${startPos} MAXRESULTS ${pageSize}`);
-        const page = data?.QueryResponse?.Invoice || [];
-        allInvoices = allInvoices.concat(page);
-        if (page.length < pageSize) break;
-        startPos += pageSize;
-      }
-      // Delivery Fee = 1010000081, Concrete Truck Delivery = 38
-      let deliveryFeeCount = 0;
-      let concreteTruckCount = 0;
-      const matchedInvoices: any[] = [];
-      for (const inv of allInvoices) {
-        let hasDelivery = false;
-        for (const line of (inv.Line || [])) {
-          const itemId = line?.SalesItemLineDetail?.ItemRef?.value;
-          if (itemId === '1010000081') { deliveryFeeCount++; hasDelivery = true; }
-          if (itemId === '38') { concreteTruckCount++; hasDelivery = true; }
-        }
-        if (hasDelivery) matchedInvoices.push({
-          invoiceNum: inv.DocNumber,
-          customer: inv.CustomerRef?.name,
-          date: inv.TxnDate,
-          total: inv.TotalAmt
-        });
-      }
-      res.json({
-        totalInvoicesScanned: allInvoices.length,
-        deliveryFeeUsed: deliveryFeeCount,
-        concreteTruckDeliveryUsed: concreteTruckCount,
-        totalDeliveries: deliveryFeeCount + concreteTruckCount,
-        invoices: matchedInvoices
-      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
