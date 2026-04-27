@@ -910,6 +910,42 @@ export function registerRoutes(httpServer: Server, app: Express) {
       }
       orderData.lineItems = validItems;
 
+      // ── Concrete truck delivery / short load fee logic ───────────────────
+      // Concrete QBO item IDs
+      const CONCRETE_QBO_IDS = new Set(["34", "32", "33", "40", "35", "36", "31"]);
+      const SHORT_LOAD_QBO_ID = "37";   // Short Load Fee - Concrete ($350)
+      const CONCRETE_DELIVERY_QBO_ID = "38"; // Concrete Truck Delivery ($70)
+
+      const concreteItems = validItems.filter((i: any) => CONCRETE_QBO_IDS.has(String(i.qboItemId)));
+      const totalConcreteYards = concreteItems.reduce((sum: number, i: any) => sum + i.qty, 0);
+      const hasShortLoadFee = validItems.some((i: any) => String(i.qboItemId) === SHORT_LOAD_QBO_ID);
+
+      if (concreteItems.length > 0) {
+        if (totalConcreteYards <= 5 && !hasShortLoadFee) {
+          // Add short load fee — no delivery fee
+          validItems.push({
+            qboItemId: SHORT_LOAD_QBO_ID,
+            name: "Short Load Fee - Concrete",
+            qty: 1,
+            unitPrice: 350,
+            amount: 350,
+          });
+          console.log(`[Order] Added Short Load Fee (${totalConcreteYards} yards ≤ 5)`);
+        } else if (totalConcreteYards <= 10 && !hasShortLoadFee) {
+          // Add concrete truck delivery fee — no short load fee
+          validItems.push({
+            qboItemId: CONCRETE_DELIVERY_QBO_ID,
+            name: "Concrete Truck Delivery",
+            qty: 1,
+            unitPrice: 70,
+            amount: 70,
+          });
+          console.log(`[Order] Added Concrete Truck Delivery fee (${totalConcreteYards} yards ≤ 10)`);
+        }
+        // Orders > 10 yards: no automatic concrete fee added
+      }
+      // ─────────────────────────────────────────────────────────────────────
+
       // Parse delivery fee from encoded address field (set during CALC_DELIVERY)
       let deliveryFee = 0;
       let deliveryMiles: number | undefined;

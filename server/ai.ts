@@ -318,7 +318,11 @@ SNAPCAP: must know size. Options: 1/2" ($4.23/10') or 3/4" ($5.98/10').
 CONCRETE: must know PSI and sack count. Options: 3000 psi 4.5 sack=$155, 3000 psi 5 sack=$160, 3500 psi 5.5 sack=$165, 3600 psi=$165, 4000 psi 6 sack=$170, 4500 psi 6.5 sack=$175 per yard.
 - "concrete" or "ready mix" — Ask: "What PSI do you need? We carry 3000, 3500, 3600, 4000, and 4500 psi."
 - "3000 psi concrete" — must clarify sack count. Ask: "4.5 sack ($155/yd) or 5 sack ($160/yd)?"
-- NOTE: Orders of 5 yards or less incur a $350 short load fee from the concrete plant. Orders of 6 yards or more do NOT have a short load fee. Always apply this correctly — only warn about the short load fee if the order is 5 yards or fewer.
+- CONCRETE FEES (automatically added to invoice — always quote these accurately):
+  - 5 yards or less: $350 Short Load Fee is added. No delivery fee.
+  - 6–10 yards: $70 Concrete Truck Delivery fee is added. No short load fee.
+  - 11+ yards: No additional fee.
+  - Always include the applicable fee when quoting a concrete total so the customer knows the full cost.
 - CONCRETE product ID varies: always match the exact name including PSI and sack count.
 
 NAILS: must know size. Options: 8D ($55.75/50lb), 16D ($55.75/50lb), 20 Common ($55.75/50lb).
