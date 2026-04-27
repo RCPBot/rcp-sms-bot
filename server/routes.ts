@@ -2237,38 +2237,95 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       const data = await upstream.json();
       res.setHeader("Access-Control-Allow-Origin", "*");
 
-      // ── Strip internal control tags from any reply field ──
+      // ── Strip internal control tags + order code fences from reply ──
       const INTERNAL_TAGS = /\[(CONFIRM_ORDER|INFO_COMPLETE|PLAN_TAKEOFF:[^\]]*|CALC_DELIVERY:[^\]]*|LOOKUP_CUSTOMER:[^\]]*|ESTIMATE_READY)\]/g;
+      const ORDER_FENCE = /```order\s*([\s\S]*?)```/i;
       const replyField = data.reply ?? data.message ?? data.content ?? data.text;
       let confirmOrderTriggered = false;
-      if (typeof replyField === "string" && INTERNAL_TAGS.test(replyField)) {
-        INTERNAL_TAGS.lastIndex = 0;
-        if (replyField.includes("[CONFIRM_ORDER]")) confirmOrderTriggered = true;
-        const cleaned = replyField.replace(INTERNAL_TAGS, "").replace(/\s{2,}/g, " ").trim();
-        // Replace whichever field had the raw reply
+      let extractedOrderJson: any = null;
+      if (typeof replyField === "string") {
+        let cleaned = replyField;
+        // Extract order JSON from code fence before stripping it
+        const fenceMatch = cleaned.match(ORDER_FENCE);
+        if (fenceMatch) {
+          confirmOrderTriggered = true;
+          try { extractedOrderJson = JSON.parse(fenceMatch[1].trim()); } catch {}
+          cleaned = cleaned.replace(ORDER_FENCE, "").replace(/\n{3,}/g, "\n\n").trim();
+        }
+        // Strip [CONFIRM_ORDER] and other internal tags
+        if (cleaned.includes("[CONFIRM_ORDER]")) confirmOrderTriggered = true;
+        cleaned = cleaned.replace(INTERNAL_TAGS, "").replace(/  +/g, " ").trim();
         if (data.reply !== undefined)   data.reply   = cleaned;
         if (data.message !== undefined) data.message = cleaned;
         if (data.content !== undefined) data.content = cleaned;
         if (data.text !== undefined)    data.text    = cleaned;
       }
 
-      // ── If order was confirmed and caller supplied a phone, SMS payment link ──
-      // The web chat header includes { customerPhone } in the request body when
-      // the user has entered their phone number during the ordering flow.
-      if (confirmOrderTriggered) {
-        const customerPhone: string | undefined = req.body?.customerPhone;
-        const cleanedPhone = customerPhone ? customerPhone.replace(/\D/g, "") : "";
+      // ── If order was confirmed, create QBO invoice + SMS payment link ──
+      if (confirmOrderTriggered && extractedOrderJson) {
+        // Fire invoice creation in the background — don't block the chat reply
+        (async () => {
+          try {
+            const orderPayload = extractedOrderJson;
+            // Phone from the order JSON (AI always includes it) or fallback from request body
+            const rawPhone: string = orderPayload.customerPhone || req.body?.customerPhone || "";
+            const cleanedPhone = rawPhone.replace(/\D/g, "");
+            const e164 = cleanedPhone.startsWith("1") ? "+" + cleanedPhone : "+1" + cleanedPhone;
+
+            // POST to our own /api/web-order to create QBO invoice
+            const origin = `${req.protocol}://${req.get('host')}`;
+            const orderResp = await fetch(`${origin}/api/web-order`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(orderPayload),
+            });
+            const orderData = await orderResp.json();
+
+            if (orderData.paymentLink && cleanedPhone.length >= 10 && isTwilioConfigured()) {
+              // SMS the real payment link
+              await sendSms(
+                e164,
+                `Rebar Concrete Products: Your invoice #${orderData.invoiceNumber} is ready. ` +
+                `Total: $${Number(orderData.total).toFixed(2)}. ` +
+                `Pay here: ${orderData.paymentLink}`
+              );
+              console.log(`[chat-proxy] Payment link SMS sent to ${e164} for invoice #${orderData.invoiceNumber}`);
+            } else if (orderData.error === "customer_not_found") {
+              // Can't create invoice — notify staff
+              console.warn(`[chat-proxy] Web order customer not found: ${JSON.stringify(orderPayload).substring(0,200)}`);
+              if (cleanedPhone.length >= 10 && isTwilioConfigured()) {
+                await sendSms(
+                  e164,
+                  "Rebar Concrete Products: We received your order but couldn't locate your account. " +
+                  "Please call 469-631-7730 and we'll get you set up right away."
+                );
+              }
+            } else if (!orderData.paymentLink && cleanedPhone.length >= 10 && isTwilioConfigured()) {
+              await sendSms(
+                e164,
+                "Rebar Concrete Products: Your order was received. " +
+                "We're preparing your invoice and will send a payment link shortly. " +
+                "Questions? Call 469-631-7730."
+              );
+            }
+          } catch (bgErr) {
+            console.error("[chat-proxy] Background invoice/SMS error:", bgErr);
+          }
+        })();
+        data.confirmOrderTriggered = true;
+      } else if (confirmOrderTriggered) {
+        // [CONFIRM_ORDER] tag only (no order JSON) — send basic acknowledgement SMS if phone present
+        const rawPhone: string = req.body?.customerPhone || "";
+        const cleanedPhone = rawPhone.replace(/\D/g, "");
         if (cleanedPhone.length >= 10 && isTwilioConfigured()) {
           const e164 = cleanedPhone.startsWith("1") ? "+" + cleanedPhone : "+1" + cleanedPhone;
-          // Fire-and-forget — don't block the chat response
           sendSms(
             e164,
-            "Your order has been received at Rebar Concrete Products. " +
-            "We will prepare your invoice and send you a payment link shortly. " +
-            "Questions? Call 469-631-7730."
-          ).catch(err => console.warn("[chat-proxy] SMS notify failed:", err));
+            "Rebar Concrete Products: Your order request was received. " +
+            "We will prepare your invoice and text you a payment link shortly. " +
+            "Call 469-631-7730 with any questions."
+          ).catch(err => console.warn("[chat-proxy] SMS fallback failed:", err));
         }
-        // Signal to the client that invoice flow was triggered
         data.confirmOrderTriggered = true;
       }
 
