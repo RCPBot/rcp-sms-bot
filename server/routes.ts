@@ -1965,6 +1965,32 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
     }
   });
 
+  // ── Send payment link SMS from web chat (no existing invoice yet) ──────────────
+  // Body: { phone: "+15551234567" }
+  // Sends a simple confirmation SMS so the customer knows their order was received
+  // and that a real payment link is coming once the invoice is created manually.
+  app.post("/api/send-payment-link-sms", express.json(), async (req, res) => {
+    try {
+      const { phone } = req.body;
+      if (!phone) return res.status(400).json({ error: "phone is required" });
+      if (!isTwilioConfigured()) return res.status(503).json({ error: "SMS not configured" });
+      const cleaned = phone.replace(/\D/g, "");
+      const e164 = cleaned.startsWith("1") ? "+" + cleaned : "+1" + cleaned;
+      if (cleaned.length < 10) return res.status(400).json({ error: "Invalid phone number" });
+      await sendSms(
+        e164,
+        "Rebar Concrete Products: Your order request has been received. " +
+        "We will create your invoice and send you a payment link shortly. " +
+        "Call 469-631-7730 with any questions."
+      );
+      console.log(`[send-payment-link-sms] Sent confirmation to ${e164}`);
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error("[send-payment-link-sms] Error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ── Delivery distance + fee lookup (used by EstimatingBot chat) ──────────────
   // GET /api/calc-delivery?address=<encoded address>
   // Returns { miles, fee, free, freeThreshold } or { error }
@@ -2199,6 +2225,8 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
   // ── /api/chat-proxy — forward chat requests to ai.rebarconcreteproducts.com ──
   // Used by the /chat-widget iframe so the fetch stays same-origin (Railway)
   // which already has CORS configured for the Shopify storefront.
+  // Also strips internal control tags ([CONFIRM_ORDER], etc.) so they never
+  // reach the customer's screen, and optionally triggers SMS payment links.
   app.post("/api/chat-proxy", express.json(), async (req, res) => {
     try {
       const upstream = await fetch("https://ai.rebarconcreteproducts.com/api/chat", {
@@ -2208,6 +2236,42 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       });
       const data = await upstream.json();
       res.setHeader("Access-Control-Allow-Origin", "*");
+
+      // ── Strip internal control tags from any reply field ──
+      const INTERNAL_TAGS = /\[(CONFIRM_ORDER|INFO_COMPLETE|PLAN_TAKEOFF:[^\]]*|CALC_DELIVERY:[^\]]*|LOOKUP_CUSTOMER:[^\]]*|ESTIMATE_READY)\]/g;
+      const replyField = data.reply ?? data.message ?? data.content ?? data.text;
+      let confirmOrderTriggered = false;
+      if (typeof replyField === "string" && INTERNAL_TAGS.test(replyField)) {
+        INTERNAL_TAGS.lastIndex = 0;
+        if (replyField.includes("[CONFIRM_ORDER]")) confirmOrderTriggered = true;
+        const cleaned = replyField.replace(INTERNAL_TAGS, "").replace(/\s{2,}/g, " ").trim();
+        // Replace whichever field had the raw reply
+        if (data.reply !== undefined)   data.reply   = cleaned;
+        if (data.message !== undefined) data.message = cleaned;
+        if (data.content !== undefined) data.content = cleaned;
+        if (data.text !== undefined)    data.text    = cleaned;
+      }
+
+      // ── If order was confirmed and caller supplied a phone, SMS payment link ──
+      // The web chat header includes { customerPhone } in the request body when
+      // the user has entered their phone number during the ordering flow.
+      if (confirmOrderTriggered) {
+        const customerPhone: string | undefined = req.body?.customerPhone;
+        const cleanedPhone = customerPhone ? customerPhone.replace(/\D/g, "") : "";
+        if (cleanedPhone.length >= 10 && isTwilioConfigured()) {
+          const e164 = cleanedPhone.startsWith("1") ? "+" + cleanedPhone : "+1" + cleanedPhone;
+          // Fire-and-forget — don't block the chat response
+          sendSms(
+            e164,
+            "Your order has been received at Rebar Concrete Products. " +
+            "We will prepare your invoice and send you a payment link shortly. " +
+            "Questions? Call 469-631-7730."
+          ).catch(err => console.warn("[chat-proxy] SMS notify failed:", err));
+        }
+        // Signal to the client that invoice flow was triggered
+        data.confirmOrderTriggered = true;
+      }
+
       res.json(data);
     } catch (err: any) {
       res.status(502).json({ error: "Chat proxy error: " + err.message });
