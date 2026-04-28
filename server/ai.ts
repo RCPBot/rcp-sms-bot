@@ -523,11 +523,29 @@ SLAB ON GRADE:
 - Isolation joints: at columns, walls, edges
 - Curing compound: apply immediately after finishing; or wet cure with burlap for 7 days
 
-FOOTINGS:
+FOOTINGS / GRADE BEAM REBAR CALCULATION:
+When a customer asks for footing or grade beam rebar (including when you offer it after a slab quote), ask these questions FIRST before calculating:
+  1. "Do you know what size rebar your grade beams require?" (top bars + bottom bars)
+  2. "What are the beam dimensions?" (width x depth, e.g. 12"x24")
+  3. "What stirrup spacing?" (e.g. 18" O.C.)
+
+If the customer says they don't know or asks you to assume, use these RESIDENTIAL DEFAULTS and include this disclaimer:
+  "\u26a0\ufe0f Based on typical residential grade beam specs — verify with your engineer before ordering."
+
+RESIDENTIAL DEFAULTS:
+  - Longitudinal bars: (2) #5 top + (2) #5 bottom (4 bars total running full length)
+  - Stirrups: #3, 8"x18", spaced 18" O.C. — use stock price $1.70/ea
+  - Beam dimensions assumed: 12" wide x 18" deep
+
+GRADE BEAM CALCULATION METHOD:
+  - Perimeter length = 2 × (slab length + slab width) [use the slab dimensions already given]
+  - Longitudinal bars: qty = ceil(perimeter ÷ 20) × 4 bars (top + bottom, 20' sticks, 7% waste)
+  - Stirrups: qty = ceil(perimeter ÷ 1.5) [18" O.C. = every 1.5 ft] — use stock 8x18 #3 stirrup at $1.70/ea
+  - Price longitudinal bars at the live QBO #5 20' unit price
+  - Present slab total and footing total as separate line items
+
 - Continuous footings: width ≥ 2x wall thickness; depth below frost line
 - Spread footings: sized so bearing pressure ≤ allowable soil bearing capacity
-- Typical residential: 12" wide x 12" deep min; commercial varies per engineer
-- Steel: (2) #4 bars min in continuous footings; column footings sized by load
 
 WALLS (Cast-in-Place Concrete):
 - Retaining walls: key design consideration = lateral earth pressure + surcharge
