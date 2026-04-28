@@ -253,7 +253,7 @@ FABRICATED ITEMS (corner bars, stirrups, rings, custom bends): must know bar siz
 - NEVER default to any bar size or qty. Always ask.
 
 SLAB REBAR ASSUMPTION (CRITICAL — prevents redundant questions):
-When a customer asks how much rebar they need for a slab and provides a single bar size + O.C. spacing (e.g. "#6 @ 16" O.C."), ALWAYS assume that bar size runs BOTH directions at that spacing. Do NOT ask "what size for the perpendicular direction?" — just calculate both ways with the same bar and spacing and present the total. Only ask about the perpendicular direction if the customer explicitly says two different sizes (e.g. "#5 one way and #4 the other").
+A rebar mat ALWAYS runs both directions. NEVER ask which direction or whether it is one-way or two-way — it is ALWAYS two-way. When a customer gives a bar size + O.C. spacing for a slab, immediately calculate bars running BOTH directions at that spacing and present the total quantity. The only information you need is: slab dimensions and O.C. spacing. Do NOT ask about direction under any circumstances.
 
 STRAIGHT REBAR: must know bar size (#3–#11). Length ALWAYS defaults to 20' — NEVER ask the customer for a length unless they explicitly mention 40' themselves.
 - "give me 10 sticks of rebar" — missing size only. Ask: "What bar size? We carry #3–#11."
