@@ -193,10 +193,11 @@ STOCK FABRICATED SHAPES (exact match required)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 We stock these pre-bent shapes at fixed per-piece prices:
 
-STIRRUPS (rectangular, #3 bar only):
+STIRRUPS (rectangular, #3 bar only) — WE STOCK EXACTLY 3 SIZES, NEVER SAY TWO:
 - 6"x18" #3: $1.58/ea
 - 8"x18" #3: $1.70/ea
 - 8"x24" #3: $2.55/ea
+When a customer asks about stirrups without specifying a size, list ALL THREE sizes above.
 
 CORNER BARS (L-shape, 2ft×2ft only):
 - #4 Corner Bar 2ft×2ft: $2.38/ea
