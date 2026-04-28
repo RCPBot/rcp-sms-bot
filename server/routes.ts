@@ -2248,6 +2248,11 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
     inputEl.addEventListener('keydown', function(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
     sendBtn.addEventListener('click', sendMessage);
     window.addEventListener('message', function(e) { if (!e.data || e.data.type !== 'rcp-prompt') return; if (e.data.text) { inputEl.value = e.data.text; inputEl.dispatchEvent(new Event('input')); sendMessage(); } });
+    // Auto-fill from ?prompt= URL param
+    (function() {
+      var p = new URLSearchParams(window.location.search).get('prompt');
+      if (p) { inputEl.value = p; inputEl.dispatchEvent(new Event('input')); setTimeout(sendMessage, 400); }
+    })();
     inputEl.focus();
   <\/script>
 </body>
@@ -2647,6 +2652,12 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
         sendMessage();
       }
     });
+
+    // Auto-fill from ?prompt= URL param
+    (function() {
+      var p = new URLSearchParams(window.location.search).get('prompt');
+      if (p) { inputEl.value = p; inputEl.dispatchEvent(new Event('input')); setTimeout(sendMessage, 400); }
+    })();
 
     inputEl.focus();
   <\/script>
