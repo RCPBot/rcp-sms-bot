@@ -61,6 +61,29 @@
       }
       tryInject(15);
     });
+
+    // ── Auto-fill from ?prompt= URL param ──
+    (function() {
+      var p = new URLSearchParams(window.location.search).get('prompt');
+      if (!p) return;
+      function tryInjectParam(attempts) {
+        var ta = document.querySelector('textarea');
+        if (!ta && attempts > 0) { setTimeout(function(){ tryInjectParam(attempts - 1); }, 200); return; }
+        if (!ta) return;
+        var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+        nativeInputValueSetter.call(ta, p);
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+        ta.focus({ preventScroll: true });
+        setTimeout(function() {
+          ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
+          setTimeout(function() {
+            var btn = document.querySelector('button[type="submit"], form button:not([type="button"])');
+            if (btn) btn.click();
+          }, 100);
+        }, 300);
+      }
+      tryInjectParam(25);
+    })();
   </script>
   </body>
 </html>
