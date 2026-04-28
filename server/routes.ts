@@ -1039,28 +1039,78 @@ export function registerRoutes(httpServer: Server, app: Express) {
       }
 
       if (qboCustomerId && isQboConfigured()) {
-        const qboInvoiceItems = (orderData.lineItems as LineItem[]).filter(i => i.qboItemId !== "CUSTOM").map(addBundleDesc);
+        const SMS_CONCRETE_QBO_IDS = new Set(["34", "32", "33", "40", "35", "36", "31"]);
+        const SMS_CONCRETE_FEE_IDS = new Set(["37", "38"]); // Short Load Fee, Concrete Truck Delivery
+        const allQboItems = (orderData.lineItems as LineItem[]).filter(i => i.qboItemId !== "CUSTOM").map(addBundleDesc);
         const customInvoiceItems = (orderData.lineItems as LineItem[]).filter(i => i.qboItemId === "CUSTOM");
         const customInvoiceNote = customInvoiceItems.length > 0
           ? ` | Unmatched items (TBD): ${customInvoiceItems.map(i => i.name).join(", ")}`
           : "";
-        const invoice = await createInvoice({
-          customerId: qboCustomerId,
-          customerEmail: conv.customerEmail!,
-          lineItems: qboInvoiceItems,
-          deliveryFee: deliveryFee > 0 ? deliveryFee : undefined,
-          deliveryMiles,
-          deliveryAddress: cleanDeliveryAddress || undefined,
-          deliveryNotes: orderData.notes || undefined,
-          customerMemo: [
-            cleanDeliveryAddress ? `Ship to: ${cleanDeliveryAddress}` : null,
-            orderData.notes || null,
-            customInvoiceNote || null,
-          ].filter(Boolean).join(" | ") || undefined,
-        });
-        invoiceId = invoice.invoiceId;
-        invoiceNumber = invoice.invoiceNumber;
-        paymentLink = invoice.paymentLink;
+
+        // Split: concrete items (+ concrete fees) vs. non-concrete materials
+        const smsConcreteLineItems = allQboItems.filter(i =>
+          SMS_CONCRETE_QBO_IDS.has(String(i.qboItemId)) || SMS_CONCRETE_FEE_IDS.has(String(i.qboItemId))
+        );
+        const smsMaterialsLineItems = allQboItems.filter(i =>
+          !SMS_CONCRETE_QBO_IDS.has(String(i.qboItemId)) && !SMS_CONCRETE_FEE_IDS.has(String(i.qboItemId))
+        );
+        const hasMixed = smsConcreteLineItems.length > 0 && smsMaterialsLineItems.length > 0;
+
+        if (hasMixed) {
+          // ── INVOICE 1: Concrete (always delivered) ──────────────────────────
+          const concreteInvoice = await createInvoice({
+            customerId: qboCustomerId,
+            customerEmail: conv.customerEmail!,
+            lineItems: smsConcreteLineItems,
+            deliveryAddress: cleanDeliveryAddress || undefined,
+            deliveryNotes: orderData.notes || undefined,
+            customerMemo: [
+              `CONCRETE — Delivered`,
+              cleanDeliveryAddress ? `Ship to: ${cleanDeliveryAddress}` : null,
+              orderData.notes || null,
+            ].filter(Boolean).join(" | ") || undefined,
+          });
+          // ── INVOICE 2: Materials / Rebar (pickup or delivery) ─────────────
+          const materialsInvoice = await createInvoice({
+            customerId: qboCustomerId,
+            customerEmail: conv.customerEmail!,
+            lineItems: smsMaterialsLineItems,
+            deliveryFee: deliveryFee > 0 ? deliveryFee : undefined,
+            deliveryMiles,
+            deliveryAddress: orderData.deliveryType === "delivery" ? (cleanDeliveryAddress || undefined) : undefined,
+            deliveryNotes: orderData.notes || undefined,
+            customerMemo: [
+              `MATERIALS — ${orderData.deliveryType === "delivery" ? "Delivery" : "Pickup"}`,
+              orderData.notes || null,
+              customInvoiceNote || null,
+            ].filter(Boolean).join(" | ") || undefined,
+          });
+          // Use Invoice 2 (materials) as the primary for the payment link SMS;
+          // both invoice numbers stored for review message
+          invoiceId = materialsInvoice.invoiceId;
+          invoiceNumber = `${concreteInvoice.invoiceNumber} & ${materialsInvoice.invoiceNumber}`;
+          paymentLink = materialsInvoice.paymentLink;
+          console.log(`[Order] Split invoices — Concrete #${concreteInvoice.invoiceNumber}, Materials #${materialsInvoice.invoiceNumber}`);
+        } else {
+          // Single-type order — create one invoice as before
+          const invoice = await createInvoice({
+            customerId: qboCustomerId,
+            customerEmail: conv.customerEmail!,
+            lineItems: allQboItems,
+            deliveryFee: deliveryFee > 0 ? deliveryFee : undefined,
+            deliveryMiles,
+            deliveryAddress: cleanDeliveryAddress || undefined,
+            deliveryNotes: orderData.notes || undefined,
+            customerMemo: [
+              cleanDeliveryAddress ? `Ship to: ${cleanDeliveryAddress}` : null,
+              orderData.notes || null,
+              customInvoiceNote || null,
+            ].filter(Boolean).join(" | ") || undefined,
+          });
+          invoiceId = invoice.invoiceId;
+          invoiceNumber = invoice.invoiceNumber;
+          paymentLink = invoice.paymentLink;
+        }
       }
 
       // Save order to DB
@@ -1958,33 +2008,114 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       const tax = Math.round(preTax * TAX_RATE * 100) / 100;
       const total = Math.round((preTax + tax) * 100) / 100;
 
-      const { invoiceId, invoiceNumber, paymentLink } = await createInvoice({
-        customerId,
-        customerEmail,
-        lineItems,
-        deliveryFee: deliveryFee > 0 ? deliveryFee : undefined,
-        deliveryMiles: deliveryMilesWeb,
-        deliveryAddress: deliveryAddress || "",
-        deliveryNotes: deliveryNotes || undefined,
-        customerMemo: `Web order via ai.rebarconcreteproducts.com`,
-      });
+      // ── Split concrete vs. materials into separate invoices when mixed ────
+      const WEB_CONCRETE_QBO_IDS = new Set(["34", "32", "33", "40", "35", "36", "31"]);
+      const WEB_CONCRETE_FEE_IDS = new Set(["37", "38"]); // Short Load Fee, Concrete Truck Delivery
 
-      // Email invoice link to customer
-      if (customerEmail) {
-        try {
-          await sendPaymentLinkEmail({
-            to: customerEmail,
-            customerName,
-            invoiceNumber,
-            total,
-            paymentLink,
-          });
-        } catch (emailErr) {
-          console.warn("[WEB-ORDER] Email send failed:", emailErr);
+      // Inject concrete fees into lineItems if not already present
+      const webConcreteItems = lineItems.filter(i => WEB_CONCRETE_QBO_IDS.has(String(i.qboItemId)));
+      const webTotalConcreteYards = webConcreteItems.reduce((sum, i) => sum + i.qty, 0);
+      const webHasShortLoadFee = lineItems.some(i => String(i.qboItemId) === "37");
+      const webHasConcreteDeliveryFee = lineItems.some(i => String(i.qboItemId) === "38");
+      if (webConcreteItems.length > 0) {
+        if (webTotalConcreteYards <= 5 && !webHasShortLoadFee) {
+          lineItems.push({ qboItemId: "37", name: "Short Load Fee - Concrete", description: "", qty: 1, unitPrice: 350, amount: 350 });
+        } else if (webTotalConcreteYards <= 10 && !webHasShortLoadFee && !webHasConcreteDeliveryFee) {
+          lineItems.push({ qboItemId: "38", name: "Concrete Truck Delivery", description: "", qty: 1, unitPrice: 70, amount: 70 });
         }
       }
 
-      console.log(`[WEB-ORDER] Invoice #${invoiceNumber} created for ${customerName} via web chat — $${total}`);
+      const webConcreteLineItems = lineItems.filter(i =>
+        WEB_CONCRETE_QBO_IDS.has(String(i.qboItemId)) || WEB_CONCRETE_FEE_IDS.has(String(i.qboItemId))
+      );
+      const webMaterialsLineItems = lineItems.filter(i =>
+        !WEB_CONCRETE_QBO_IDS.has(String(i.qboItemId)) && !WEB_CONCRETE_FEE_IDS.has(String(i.qboItemId))
+      );
+      const webHasMixed = webConcreteLineItems.length > 0 && webMaterialsLineItems.length > 0;
+
+      let invoiceId: string;
+      let invoiceNumber: string;
+      let paymentLink: string | null;
+
+      if (webHasMixed) {
+        // ── INVOICE 1: Concrete (always delivered) ──────────────────────────
+        const concreteSubtotal = webConcreteLineItems.reduce((s, i) => s + i.amount, 0);
+        const concreteInv = await createInvoice({
+          customerId,
+          customerEmail,
+          lineItems: webConcreteLineItems,
+          deliveryAddress: deliveryAddress || "",
+          deliveryNotes: deliveryNotes || undefined,
+          customerMemo: [
+            `CONCRETE — Delivered | Web order via ai.rebarconcreteproducts.com`,
+            deliveryAddress ? `Ship to: ${deliveryAddress}` : null,
+            deliveryNotes || null,
+          ].filter(Boolean).join(" | "),
+        });
+        // ── INVOICE 2: Materials / Rebar (pickup or delivery) ─────────────
+        const materialsSubtotal = webMaterialsLineItems.reduce((s, i) => s + i.amount, 0);
+        const materialsInv = await createInvoice({
+          customerId,
+          customerEmail,
+          lineItems: webMaterialsLineItems,
+          deliveryFee: deliveryFee > 0 ? deliveryFee : undefined,
+          deliveryMiles: deliveryMilesWeb,
+          deliveryAddress: deliveryAddress || "",
+          deliveryNotes: deliveryNotes || undefined,
+          customerMemo: `MATERIALS — Pickup | Web order via ai.rebarconcreteproducts.com`,
+        });
+        invoiceId = materialsInv.invoiceId;
+        invoiceNumber = `${concreteInv.invoiceNumber} & ${materialsInv.invoiceNumber}`;
+        paymentLink = materialsInv.paymentLink;
+        console.log(`[WEB-ORDER] Split invoices — Concrete #${concreteInv.invoiceNumber} ($${concreteSubtotal.toFixed(2)}), Materials #${materialsInv.invoiceNumber} ($${materialsSubtotal.toFixed(2)}) for ${customerName}`);
+
+        // Email both invoice numbers to customer
+        if (customerEmail) {
+          try {
+            await sendPaymentLinkEmail({
+              to: customerEmail,
+              customerName,
+              invoiceNumber,
+              total,
+              paymentLink: materialsInv.paymentLink,
+            });
+          } catch (emailErr) {
+            console.warn("[WEB-ORDER] Email send failed:", emailErr);
+          }
+        }
+      } else {
+        // Single-type order — create one invoice as before
+        const singleInvoice = await createInvoice({
+          customerId,
+          customerEmail,
+          lineItems,
+          deliveryFee: deliveryFee > 0 ? deliveryFee : undefined,
+          deliveryMiles: deliveryMilesWeb,
+          deliveryAddress: deliveryAddress || "",
+          deliveryNotes: deliveryNotes || undefined,
+          customerMemo: `Web order via ai.rebarconcreteproducts.com`,
+        });
+        invoiceId = singleInvoice.invoiceId;
+        invoiceNumber = singleInvoice.invoiceNumber;
+        paymentLink = singleInvoice.paymentLink;
+
+        // Email invoice link to customer
+        if (customerEmail) {
+          try {
+            await sendPaymentLinkEmail({
+              to: customerEmail,
+              customerName,
+              invoiceNumber,
+              total,
+              paymentLink,
+            });
+          } catch (emailErr) {
+            console.warn("[WEB-ORDER] Email send failed:", emailErr);
+          }
+        }
+      }
+
+      console.log(`[WEB-ORDER] Invoice(s) #${invoiceNumber} created for ${customerName} via web chat — $${total}`);
 
       res.json({
         success: true,
