@@ -1060,18 +1060,32 @@ export function registerRoutes(httpServer: Server, app: Express) {
         const hasMixed = smsConcreteLineItems.length > 0 && smsMaterialsLineItems.length > 0;
 
         if (hasMixed) {
+          // Parse split delivery notes from the notes string
+          const rawNotes = orderData.notes || "";
+          const concreteDeliveryMatch = rawNotes.match(/CONCRETE delivery:\s*([^.]+\.?)/i);
+          const materialsDeliveryMatch = rawNotes.match(/MATERIALS delivery:\s*([^.]+\.?)/i);
+          const concreteDeliveryNote = concreteDeliveryMatch ? concreteDeliveryMatch[1].trim() : null;
+          const materialsDeliveryNote = materialsDeliveryMatch ? materialsDeliveryMatch[1].trim() : null;
+          // Fall back to full notes if no split pattern found
+          const concreteMemo = [
+            `CONCRETE — Delivered`,
+            cleanDeliveryAddress ? `Ship to: ${cleanDeliveryAddress}` : null,
+            concreteDeliveryNote ? `Delivery: ${concreteDeliveryNote}` : (rawNotes || null),
+          ].filter(Boolean).join(" | ");
+          const materialsMemo = [
+            `MATERIALS — ${orderData.deliveryType === "delivery" ? "Delivery" : "Pickup"}`,
+            materialsDeliveryNote ? `Delivery: ${materialsDeliveryNote}` : (rawNotes || null),
+            customInvoiceNote || null,
+          ].filter(Boolean).join(" | ");
+
           // ── INVOICE 1: Concrete (always delivered) ──────────────────────────
           const concreteInvoice = await createInvoice({
             customerId: qboCustomerId,
             customerEmail: conv.customerEmail!,
             lineItems: smsConcreteLineItems,
             deliveryAddress: cleanDeliveryAddress || undefined,
-            deliveryNotes: orderData.notes || undefined,
-            customerMemo: [
-              `CONCRETE — Delivered`,
-              cleanDeliveryAddress ? `Ship to: ${cleanDeliveryAddress}` : null,
-              orderData.notes || null,
-            ].filter(Boolean).join(" | ") || undefined,
+            deliveryNotes: concreteDeliveryNote || rawNotes || undefined,
+            customerMemo: concreteMemo || undefined,
           });
           // ── INVOICE 2: Materials / Rebar (pickup or delivery) ─────────────
           const materialsInvoice = await createInvoice({
@@ -1081,12 +1095,8 @@ export function registerRoutes(httpServer: Server, app: Express) {
             deliveryFee: deliveryFee > 0 ? deliveryFee : undefined,
             deliveryMiles,
             deliveryAddress: orderData.deliveryType === "delivery" ? (cleanDeliveryAddress || undefined) : undefined,
-            deliveryNotes: orderData.notes || undefined,
-            customerMemo: [
-              `MATERIALS — ${orderData.deliveryType === "delivery" ? "Delivery" : "Pickup"}`,
-              orderData.notes || null,
-              customInvoiceNote || null,
-            ].filter(Boolean).join(" | ") || undefined,
+            deliveryNotes: materialsDeliveryNote || rawNotes || undefined,
+            customerMemo: materialsMemo || undefined,
           });
           // Use Invoice 2 (materials) as the primary for the payment link SMS;
           // both invoice numbers stored for review message
@@ -2044,6 +2054,13 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       let paymentLink: string | null;
 
       if (webHasMixed) {
+        // Parse split delivery notes
+        const rawWebNotes = deliveryNotes || "";
+        const webConcreteDeliveryMatch = rawWebNotes.match(/CONCRETE delivery:\s*([^.]+\.?)/i);
+        const webMaterialsDeliveryMatch = rawWebNotes.match(/MATERIALS delivery:\s*([^.]+\.?)/i);
+        const webConcreteDeliveryNote = webConcreteDeliveryMatch ? webConcreteDeliveryMatch[1].trim() : null;
+        const webMaterialsDeliveryNote = webMaterialsDeliveryMatch ? webMaterialsDeliveryMatch[1].trim() : null;
+
         // ── INVOICE 1: Concrete (always delivered) ──────────────────────────
         const concreteSubtotal = webConcreteLineItems.reduce((s, i) => s + i.amount, 0);
         const concreteInv = await createInvoice({
@@ -2051,11 +2068,11 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
           customerEmail,
           lineItems: webConcreteLineItems,
           deliveryAddress: deliveryAddress || "",
-          deliveryNotes: deliveryNotes || undefined,
+          deliveryNotes: webConcreteDeliveryNote || rawWebNotes || undefined,
           customerMemo: [
             `CONCRETE — Delivered | Web order via ai.rebarconcreteproducts.com`,
             deliveryAddress ? `Ship to: ${deliveryAddress}` : null,
-            deliveryNotes || null,
+            webConcreteDeliveryNote ? `Delivery: ${webConcreteDeliveryNote}` : (rawWebNotes || null),
           ].filter(Boolean).join(" | "),
         });
         // ── INVOICE 2: Materials / Rebar (pickup or delivery) ─────────────
@@ -2067,8 +2084,11 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
           deliveryFee: deliveryFee > 0 ? deliveryFee : undefined,
           deliveryMiles: deliveryMilesWeb,
           deliveryAddress: deliveryAddress || "",
-          deliveryNotes: deliveryNotes || undefined,
-          customerMemo: `MATERIALS — Pickup | Web order via ai.rebarconcreteproducts.com`,
+          deliveryNotes: webMaterialsDeliveryNote || rawWebNotes || undefined,
+          customerMemo: [
+            `MATERIALS — Pickup | Web order via ai.rebarconcreteproducts.com`,
+            webMaterialsDeliveryNote ? `Delivery: ${webMaterialsDeliveryNote}` : (rawWebNotes || null),
+          ].filter(Boolean).join(" | "),
         });
         invoiceId = materialsInv.invoiceId;
         invoiceNumber = `${concreteInv.invoiceNumber} & ${materialsInv.invoiceNumber}`;

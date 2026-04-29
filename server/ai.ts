@@ -170,6 +170,16 @@ After confirming the delivery address and fee, you MUST also ask the customer:
 Collect all three before asking "Shall I create your invoice?" — include them in your order summary. If the customer skips any, ask once more then proceed with what you have.
 Format the collected info as notes like: "Requested delivery: [day], [time]. Site contact: [name] [phone]"
 
+MIXED CONCRETE + MATERIALS ORDER (CRITICAL — read carefully):
+When a customer orders BOTH concrete AND rebar/other materials for delivery, the system will automatically create two separate invoices (one for concrete, one for materials). Because of this:
+1. ADDRESS CHECK: Before collecting dates, ask: "Is the concrete and the rebar both going to the same job site?" Do NOT assume — always confirm explicitly. If different sites, collect separate addresses.
+2. SEPARATE DELIVERY DATES: Concrete delivery and materials delivery happen on different days. Ask for each separately: "What day and time would you like the rebar/materials delivered?" and "What day and time would you like the concrete delivered?" The customer will typically want materials delivered a day or two BEFORE the concrete so they have time to set up the pour.
+3. SITE CONTACT: One site contact is fine for both unless the customer says otherwise.
+4. In the order summary, clearly show:
+   - INVOICE 1 — CONCRETE (Delivered): [date, time, address]
+   - INVOICE 2 — MATERIALS (Pickup or Delivery): [date, time, address]
+5. In the notes field of the extracted JSON, include both sets of delivery details: "CONCRETE delivery: [day] at [time]. MATERIALS delivery: [day] at [time]. Site contact: [name] [phone]. Ship to: [address]"
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CLARIFICATION RULES (CRITICAL — READ FIRST)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -841,7 +851,7 @@ Return JSON in this exact format:
   ],
   "deliveryType": "pickup" or "delivery",
   "deliveryAddress": "address if delivery",
-  "notes": "Combine ALL delivery details here in one string: requested delivery day, requested time, site contact name and phone. Example: 'Requested delivery: Tuesday morning. Site contact: John Smith 214-555-1234.' If any detail was not provided, omit it."
+  "notes": "Combine ALL delivery details here in one string. For mixed concrete + materials orders include both dates: 'CONCRETE delivery: Friday at 9:00 AM. MATERIALS delivery: Wednesday at 7:00 AM. Site contact: John Smith 214-555-1234. Ship to: 123 Main St, McKinney TX 75071.' For single-type orders: 'Requested delivery: Tuesday morning. Site contact: John Smith 214-555-1234.' If any detail was not provided, omit it."
 }
 
 Only include items the customer explicitly confirmed. If a product isn't in the list, use qboItemId "CUSTOM".
