@@ -193,24 +193,24 @@ export function registerRoutes(httpServer: Server, app: Express) {
   // Deduplication: we track processed notification IDs in memory (per process).
   const processedQboNotifications = new Set<string>();
 
-  app.post('/api/qbo/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
-    // 1. Verify signature
+  app.post('/api/qbo/webhook', async (req, res) => {
+    // 1. Verify signature using rawBody captured by global express.json() verify hook
     const webhookToken = process.env.QBO_WEBHOOK_TOKEN || "";
     if (webhookToken) {
       const signature = req.headers['intuit-signature'] as string || "";
-      const payload = req.body as Buffer;
-      const expected = crypto.createHmac('sha256', webhookToken).update(payload).digest('base64');
-      if (signature !== expected) {
-        console.warn('[QBO Webhook] Signature mismatch — rejecting request');
-        return res.status(401).json({ error: 'Invalid signature' });
+      const rawBuf = (req as any).rawBody as Buffer | undefined;
+      if (rawBuf) {
+        const expected = crypto.createHmac('sha256', webhookToken).update(rawBuf).digest('base64');
+        if (signature !== expected) {
+          console.warn('[QBO Webhook] Signature mismatch — rejecting request');
+          return res.status(401).json({ error: 'Invalid signature' });
+        }
       }
     }
 
-    // 2. Parse payload
-    let body: any;
-    try {
-      body = JSON.parse((req.body as Buffer).toString('utf8'));
-    } catch {
+    // 2. Body already parsed by global express.json()
+    const body = req.body;
+    if (!body) {
       return res.status(400).json({ error: 'Invalid JSON' });
     }
 
