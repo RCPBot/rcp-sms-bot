@@ -2,7 +2,7 @@ import type { Express } from "express";
 import type { Server } from "http";
 import express from "express";
 import { storage } from "./storage";
-import { sendSms, isTwilioConfigured, sendPaymentLinkEmail, sendStaffOrderNotification } from "./sms";
+import { sendSms, isTwilioConfigured, sendPaymentLinkEmail, sendStaffOrderNotification, sendVerificationCode } from "./sms";
 import { processMessage, extractOrderFromConversation, extractCustomerInfo, isAiConfigured } from "./ai";
 import { syncProducts, findOrCreateCustomer, findExistingCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice, updateRailwayEnvVar, setLiveRefreshToken, getOrCreateBotCustomer, getQboItems, getInvoiceById } from "./qbo";
 import { performTakeoff } from "./takeoff";
@@ -212,6 +212,28 @@ function addBundleDesc(item: LineItem): LineItem {
   const existingDesc = item.description ? `${item.description} | ` : "";
   return { ...item, description: `${existingDesc}${bundleDesc}` };
 }
+
+// ── In-memory verification code store ────────────────────────────────────────
+// Key: phone (E.164), Value: { code, expiresAt, payload, attempts }
+const pendingVerifications = new Map<string, {
+  code: string;
+  expiresAt: number;
+  payload?: any; // stored web-order payload, released after verify
+  attempts: number;
+}>();
+
+// Phones that have successfully verified (within last 10 min) — allows /api/web-order to proceed
+const verifiedWebPhones = new Map<string, number>(); // phone (E.164) -> grantedAt ms
+
+function generateCode(): string {
+  return String(Math.floor(100000 + Math.random() * 900000)); // 6-digit
+}
+
+function normalizeVerifyInput(input: string): string {
+  // Accept "123456", "123 456", "code is 123456", etc.
+  const match = input.replace(/\s/g, "").match(/\d{6}/);
+  return match ? match[0] : "";
+}
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function registerRoutes(httpServer: Server, app: Express) {
@@ -243,6 +265,75 @@ export function registerRoutes(httpServer: Server, app: Express) {
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── POST /api/request-verification ────────────────────────────────────────────
+  // Web chat calls this right before checkout — sends a 6-digit code to the customer's phone.
+  // Body: { phone: "+15551234567", payload: <full web-order body to hold until verified> }
+  app.post("/api/request-verification", express.json(), async (req, res) => {
+    try {
+      const { phone, payload } = req.body || {};
+      if (!phone) return res.status(400).json({ error: "phone is required" });
+
+      // Normalize to E.164
+      const digits = phone.replace(/\D/g, "");
+      const e164 = digits.length === 10 ? `+1${digits}` : `+${digits}`;
+
+      const code = generateCode();
+      const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes
+      pendingVerifications.set(e164, { code, expiresAt, payload: payload || null, attempts: 0 });
+
+      await sendVerificationCode(e164, code);
+      console.log(`[Verify] Code ${code} issued for ${e164}, expires ${new Date(expiresAt).toISOString()}`);
+
+      res.json({ success: true, message: `Verification code sent to ${e164}` });
+    } catch (err: any) {
+      console.error("[Verify] request-verification error:", err);
+      res.status(500).json({ error: err.message || "Failed to send verification code" });
+    }
+  });
+
+  // ── POST /api/confirm-verification ───────────────────────────────────────────
+  // Web chat submits the code the customer typed. Returns { verified: true } on success.
+  // Body: { phone: "+15551234567", code: "123456" }
+  app.post("/api/confirm-verification", express.json(), async (req, res) => {
+    try {
+      const { phone, code } = req.body || {};
+      if (!phone || !code) return res.status(400).json({ error: "phone and code are required" });
+
+      const digits = phone.replace(/\D/g, "");
+      const e164 = digits.length === 10 ? `+1${digits}` : `+${digits}`;
+      const normalized = normalizeVerifyInput(String(code));
+
+      const pending = pendingVerifications.get(e164);
+      if (!pending) {
+        return res.status(400).json({ error: "No verification pending for this number. Please request a new code." });
+      }
+      if (Date.now() > pending.expiresAt) {
+        pendingVerifications.delete(e164);
+        return res.status(400).json({ error: "Code expired. Please request a new code." });
+      }
+      pending.attempts++;
+      if (pending.attempts > 5) {
+        pendingVerifications.delete(e164);
+        return res.status(429).json({ error: "Too many incorrect attempts. Please request a new code." });
+      }
+      if (normalized !== pending.code) {
+        return res.status(400).json({ error: `Incorrect code. ${6 - pending.attempts} attempt(s) remaining.` });
+      }
+
+      // Code matched — release stored payload and clear
+      const storedPayload = pending.payload;
+      pendingVerifications.delete(e164);
+      // Grant web-order token (valid 10 min)
+      verifiedWebPhones.set(e164, Date.now());
+      console.log(`[Verify] Code verified for ${e164} — web-order token granted`);
+
+      res.json({ verified: true, payload: storedPayload });
+    } catch (err: any) {
+      console.error("[Verify] confirm-verification error:", err);
+      res.status(500).json({ error: err.message || "Verification failed" });
     }
   });
 
@@ -656,6 +747,48 @@ export function registerRoutes(httpServer: Server, app: Express) {
       }
 
       // ── Shortcut: APPROVE keyword from customer ────────────────────────────
+      // ── awaiting_sms_verify: customer must reply with their 6-digit code ────────
+      if (conv.stage === "awaiting_sms_verify") {
+        const pending = pendingVerifications.get(cleanPhone);
+        if (!pending) {
+          await storage.updateConversation(conv.id, { stage: "ordering" });
+          const expiredMsg = "Your verification code has expired. Please confirm your order again and we\'ll send a new code.";
+          await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: expiredMsg });
+          await sendSms(cleanPhone, expiredMsg);
+          return;
+        }
+        if (Date.now() > pending.expiresAt) {
+          pendingVerifications.delete(cleanPhone);
+          await storage.updateConversation(conv.id, { stage: "ordering" });
+          const expiredMsg = "Your verification code expired. Please confirm your order again to receive a new one.";
+          await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: expiredMsg });
+          await sendSms(cleanPhone, expiredMsg);
+          return;
+        }
+        const inputCode = normalizeVerifyInput(cleanBody);
+        pending.attempts++;
+        if (pending.attempts > 5) {
+          pendingVerifications.delete(cleanPhone);
+          await storage.updateConversation(conv.id, { stage: "ordering" });
+          const blockedMsg = "Too many incorrect attempts. Please confirm your order again to receive a new verification code.";
+          await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: blockedMsg });
+          await sendSms(cleanPhone, blockedMsg);
+          return;
+        }
+        if (inputCode !== pending.code) {
+          const remaining = 6 - pending.attempts;
+          const wrongMsg = `That code doesn't match. Please try again. ${remaining} attempt(s) remaining.`;
+          await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: wrongMsg });
+          await sendSms(cleanPhone, wrongMsg);
+          return;
+        }
+        // Code matched — proceed to invoice creation
+        pendingVerifications.delete(cleanPhone);
+        console.log(`[Verify] SMS code verified for ${cleanPhone} — creating invoice`);
+        await handleOrderConfirmation(conv.id, cleanPhone);
+        return;
+      }
+
       if (conv.stage === "estimating" && cleanBody.trim().toUpperCase() === "APPROVE") {
         const est = await storage.getEstimateByConversation(conv.id);
         if (est && est.status !== "approved") {
@@ -807,8 +940,21 @@ export function registerRoutes(httpServer: Server, app: Express) {
       }
 
       if (intent.type === "confirm_order") {
-        // Extract order, create QBO invoice, send payment link
-        await handleOrderConfirmation(conv.id, cleanPhone);
+        // ── Verification step before invoice creation ────────────────────────────
+        // Send a 6-digit code to the customer's phone. Invoice creation is
+        // deferred until they reply with the correct code.
+        const smsVerifyCode = generateCode();
+        pendingVerifications.set(cleanPhone, {
+          code: smsVerifyCode,
+          expiresAt: Date.now() + 5 * 60 * 1000,
+          attempts: 0,
+        });
+        await storage.updateConversation(conv.id, { stage: "awaiting_sms_verify" });
+        const verifyMsg = `To confirm your order, please reply with this 6-digit verification code:\n\n${smsVerifyCode}\n\nThis code expires in 5 minutes.`;
+        await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: verifyMsg });
+        await sendSms(cleanPhone, verifyMsg);
+        console.log(`[Verify] SMS verification code sent to ${cleanPhone} before invoice creation`);
+        // ───────────────────────────────────────────────────────────────────────
       }
 
       if (intent.type === "plan_takeoff") {
@@ -1994,11 +2140,28 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
   // Body: { customerName, customerEmail, customerPhone, customerCompany, deliveryAddress, items: [{name, qboItemId, qty, unitPrice}] }
   app.post("/api/web-order", express.json(), async (req, res) => {
     try {
-      const { customerName, customerEmail, customerPhone, customerCompany, deliveryAddress, deliveryNotes, deliveryMilesFallback, deliveryFeeFallback, items } = req.body;
+      const { customerName, customerEmail, customerPhone, customerCompany, deliveryAddress, deliveryNotes, deliveryMilesFallback, deliveryFeeFallback, items, verifiedPhone } = req.body;
 
       if (!customerName || !customerPhone || !Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ error: "customerName, customerPhone, and items are required" });
       }
+
+      // ── Verification gate ─────────────────────────────────────────────────
+      // /api/confirm-verification must have been called successfully for this phone
+      // within the last 10 minutes before /api/web-order is accepted.
+      const rawPhone = verifiedPhone || customerPhone || "";
+      const phoneDigits = rawPhone.replace(/\D/g, "");
+      const e164Phone = phoneDigits.length === 10 ? `+1${phoneDigits}` : `+${phoneDigits}`;
+      const grantedAt = verifiedWebPhones.get(e164Phone);
+      if (!grantedAt || Date.now() - grantedAt > 10 * 60 * 1000) {
+        return res.status(403).json({
+          error: "verification_required",
+          message: "Order verification required. Please enter the code sent to your phone.",
+        });
+      }
+      verifiedWebPhones.delete(e164Phone); // one-time use
+      console.log(`[Verify] Web-order authorized for ${e164Phone}`);
+      // ─────────────────────────────────────────────────────────────────────────────
 
       // Look up existing QBO customer by name + phone — no new customers created via web (fraud prevention)
       const customerId = await findExistingCustomer({
@@ -2535,7 +2698,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
         if (data.text !== undefined)    data.text    = cleaned;
       }
 
-      // ── If order was confirmed, create QBO invoice + SMS payment link ──
+      // ── If order was confirmed, send verification code then create invoice ──
       if (confirmOrderTriggered && extractedOrderJson) {
         try {
           // Merge customer identity fields from req.body into the AI-generated order payload
@@ -2550,12 +2713,73 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
           const cleanedPhone = rawPhone.replace(/\D/g, "");
           const e164 = cleanedPhone.startsWith("1") ? "+" + cleanedPhone : "+1" + cleanedPhone;
 
+          // ── Verification gate for web chat ─────────────────────────────────────────
+          // Check if this request includes a verified code from the widget
+          const submittedCode: string = req.body?.verificationCode || "";
+          const alreadyVerified = verifiedWebPhones.get(e164) && (Date.now() - verifiedWebPhones.get(e164)!) <= 10 * 60 * 1000;
+
+          if (!submittedCode && !alreadyVerified) {
+            // No code yet — send verification code and ask widget to collect it
+            const code = generateCode();
+            pendingVerifications.set(e164, { code, expiresAt: Date.now() + 5 * 60 * 1000, payload: orderPayload, attempts: 0 });
+            try { await sendVerificationCode(e164, code); } catch (smsErr) {
+              console.error("[chat-proxy] Failed to send verification SMS:", smsErr);
+            }
+            console.log(`[chat-proxy] Verification code sent to ${e164} — awaiting customer reply`);
+            const verifyPrompt = "To confirm your order, please enter the 6-digit verification code we just texted to your phone.";
+            if (data.reply !== undefined)   data.reply   = verifyPrompt;
+            if (data.message !== undefined) data.message = verifyPrompt;
+            if (data.content !== undefined) data.content = verifyPrompt;
+            if (data.text !== undefined)    data.text    = verifyPrompt;
+            data.verificationRequired = true;
+            res.json(data);
+            return;
+          }
+
+          if (submittedCode && !alreadyVerified) {
+            // Customer submitted a code — validate it
+            const normalized = normalizeVerifyInput(submittedCode);
+            const pending = pendingVerifications.get(e164);
+            if (!pending || Date.now() > pending.expiresAt) {
+              pendingVerifications.delete(e164);
+              const expiredMsg = "Your verification code has expired. Please start your order again.";
+              if (data.reply !== undefined)   data.reply   = expiredMsg;
+              if (data.message !== undefined) data.message = expiredMsg;
+              if (data.content !== undefined) data.content = expiredMsg;
+              if (data.text !== undefined)    data.text    = expiredMsg;
+              data.verificationFailed = true;
+              res.json(data);
+              return;
+            }
+            pending.attempts++;
+            if (pending.attempts > 5 || normalized !== pending.code) {
+              if (pending.attempts > 5) pendingVerifications.delete(e164);
+              const remaining = Math.max(0, 6 - pending.attempts);
+              const wrongMsg = pending.attempts > 5
+                ? "Too many incorrect attempts. Please start your order again."
+                : `Incorrect code. ${remaining} attempt(s) remaining.`;
+              if (data.reply !== undefined)   data.reply   = wrongMsg;
+              if (data.message !== undefined) data.message = wrongMsg;
+              if (data.content !== undefined) data.content = wrongMsg;
+              if (data.text !== undefined)    data.text    = wrongMsg;
+              data.verificationFailed = true;
+              res.json(data);
+              return;
+            }
+            // Code matched — grant token
+            pendingVerifications.delete(e164);
+            verifiedWebPhones.set(e164, Date.now());
+            console.log(`[chat-proxy] Verification code confirmed for ${e164}`);
+          }
+          // ────────────────────────────────────────────────────────────────────────────
+
           // POST to our own /api/web-order to create QBO invoice (await so we can inject error into reply)
           const origin = `${req.protocol}://${req.get('host')}`;
           const orderResp = await fetch(`${origin}/api/web-order`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(orderPayload),
+            // Include verifiedPhone so the /api/web-order verification gate passes
+            body: JSON.stringify({ ...orderPayload, verifiedPhone: e164 }),
           });
           const orderData = await orderResp.json();
 

@@ -94,6 +94,13 @@ function splitMessage(text: string, maxLen: number): string[] {
   return chunks;
 }
 
+// ── Order verification codes ─────────────────────────────────────────────────
+export async function sendVerificationCode(to: string, code: string): Promise<void> {
+  const body = `Your Rebar Concrete Products order verification code is: ${code}\n\nThis code expires in 5 minutes. Do not share it.`;
+  await sendSms(to, body);
+  console.log(`[Verify] Sent verification code to ${to}`);
+}
+
 export function isTwilioConfigured(): boolean {
   return !!(
     process.env.TWILIO_ACCOUNT_SID &&
