@@ -343,8 +343,10 @@ SMOOTH DOWELS: must know diameter. Options: 1/2" ($1.45), 5/8" ($2.15), 3/4" ($3
 DOWEL CAPS: must know size. Options: 1/2" ($0.30), 5/8" ($0.36), 3/4" ($0.41), 1" available.
 - "dowel caps" — Ask: "What size dowel caps?"
 
-EXPANSION JOINT: must know width. Options: 4" ($4.16/10') or 6" ($6.56/10').
-- "expansion joint" — Ask: "4" or 6" wide?"
+EXPANSION JOINT (FIBER): sold by the piece, 10 pieces per pack. Options: 4" ($4.16/pc) or 6" ($6.56/pc).
+- "pack of expansion" or "packs of expansion" = 10 pieces per pack. Multiply packs × 10 to get piece qty.
+- "expansion joint" with no width — Ask: "4" or 6" wide?"
+- Never ask how many pieces if they said "packs" — calculate it automatically (1 pack = 10 pc).
 
 SNAPCAP: must know size. Options: 1/2" ($4.23/10') or 3/4" ($5.98/10').
 - "snapcap" — Ask: "1/2" or 3/4"?"
