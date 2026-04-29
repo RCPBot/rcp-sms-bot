@@ -55,7 +55,7 @@ export async function sendPaymentLinkEmail(params: {
     return;
   }
   await transporter.sendMail({
-    from: process.env.GMAIL_USER || process.env.EMAIL_USER || "noreply@rebarconcreteproducts.com",
+    from: `"Rebar Concrete Products" <${process.env.GMAIL_USER || process.env.EMAIL_USER || "noreply@rebarconcreteproducts.com"}>`,
     to: params.to,
     subject: `Your Rebar Concrete Products Invoice #${params.invoiceNumber} — Pay Online`,
     text: [
@@ -188,7 +188,7 @@ export async function sendStaffOrderNotification(params: {
     for (const email of STAFF_EMAILS) {
       try {
         await transporter.sendMail({
-          from: process.env.GMAIL_USER || process.env.EMAIL_USER || "noreply@rebarconcreteproducts.com",
+          from: `"Rebar Concrete Products" <${process.env.GMAIL_USER || process.env.EMAIL_USER || "noreply@rebarconcreteproducts.com"}>`,
           to: email,
           subject: `🔔 New ${sourceLabel} — Invoice #${invoiceNumber} | ${customerName} | $${total.toFixed(2)}`,
           text: emailText,
