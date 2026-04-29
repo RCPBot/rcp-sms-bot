@@ -2508,9 +2508,16 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
         // Fire invoice creation in the background — don't block the chat reply
         (async () => {
           try {
-            const orderPayload = extractedOrderJson;
+            // Merge customer identity fields from req.body into the AI-generated order payload
+            // (the AI's order JSON doesn't include customerEmail — we inject it here)
+            const orderPayload = {
+              ...extractedOrderJson,
+              customerName: extractedOrderJson.customerName || req.body?.customerName || "",
+              customerPhone: extractedOrderJson.customerPhone || req.body?.customerPhone || "",
+              customerEmail: extractedOrderJson.customerEmail || req.body?.customerEmail || "",
+            };
             // Phone from the order JSON (AI always includes it) or fallback from request body
-            const rawPhone: string = orderPayload.customerPhone || req.body?.customerPhone || "";
+            const rawPhone: string = orderPayload.customerPhone || "";
             const cleanedPhone = rawPhone.replace(/\D/g, "");
             const e164 = cleanedPhone.startsWith("1") ? "+" + cleanedPhone : "+1" + cleanedPhone;
 
