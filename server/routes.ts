@@ -923,7 +923,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
       if (concreteItems.length > 0) {
         if (totalConcreteYards <= 5 && !hasShortLoadFee) {
-          // Add short load fee — no delivery fee
+          // ≤5 yards: flat $350 Short Load Fee (1 qty)
           validItems.push({
             qboItemId: SHORT_LOAD_QBO_ID,
             name: "Short Load Fee - Concrete",
@@ -932,18 +932,21 @@ export function registerRoutes(httpServer: Server, app: Express) {
             amount: 350,
           });
           console.log(`[Order] Added Short Load Fee (${totalConcreteYards} yards ≤ 5)`);
-        } else if (totalConcreteYards <= 10 && !hasShortLoadFee) {
-          // Add concrete truck delivery fee — no short load fee
-          validItems.push({
-            qboItemId: CONCRETE_DELIVERY_QBO_ID,
-            name: "Concrete Truck Delivery",
-            qty: 1,
-            unitPrice: 70,
-            amount: 70,
-          });
-          console.log(`[Order] Added Concrete Truck Delivery fee (${totalConcreteYards} yards ≤ 10)`);
+        } else if (!hasShortLoadFee) {
+          // 6+ yards: 1 Concrete Truck Delivery fee per 10 yards (rounded up)
+          const hasConcreteDeliveryFee = validItems.some((i: any) => String(i.qboItemId) === CONCRETE_DELIVERY_QBO_ID);
+          if (!hasConcreteDeliveryFee) {
+            const truckQty = Math.ceil(totalConcreteYards / 10);
+            validItems.push({
+              qboItemId: CONCRETE_DELIVERY_QBO_ID,
+              name: "Concrete Truck Delivery",
+              qty: truckQty,
+              unitPrice: 70,
+              amount: truckQty * 70,
+            });
+            console.log(`[Order] Added ${truckQty}x Concrete Truck Delivery fee (${totalConcreteYards} yards → ${truckQty} trucks)`);
+          }
         }
-        // Orders > 10 yards: no automatic concrete fee added
       }
       // ─────────────────────────────────────────────────────────────────────
 
@@ -2019,9 +2022,12 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       const webHasConcreteDeliveryFee = lineItems.some(i => String(i.qboItemId) === "38");
       if (webConcreteItems.length > 0) {
         if (webTotalConcreteYards <= 5 && !webHasShortLoadFee) {
+          // ≤5 yards: flat $350 Short Load Fee (1 qty)
           lineItems.push({ qboItemId: "37", name: "Short Load Fee - Concrete", description: "", qty: 1, unitPrice: 350, amount: 350 });
-        } else if (webTotalConcreteYards <= 10 && !webHasShortLoadFee && !webHasConcreteDeliveryFee) {
-          lineItems.push({ qboItemId: "38", name: "Concrete Truck Delivery", description: "", qty: 1, unitPrice: 70, amount: 70 });
+        } else if (!webHasShortLoadFee && !webHasConcreteDeliveryFee) {
+          // 6+ yards: 1 Concrete Truck Delivery fee per 10 yards (rounded up)
+          const webTruckQty = Math.ceil(webTotalConcreteYards / 10);
+          lineItems.push({ qboItemId: "38", name: "Concrete Truck Delivery", description: "", qty: webTruckQty, unitPrice: 70, amount: webTruckQty * 70 });
         }
       }
 

@@ -325,9 +325,9 @@ CONCRETE: must know PSI and sack count. Options: 3000 psi 4.5 sack=$155, 3000 ps
 - "concrete" or "ready mix" — Ask: "What PSI do you need? We carry 3000, 3500, 3600, 4000, and 4500 psi."
 - "3000 psi concrete" — must clarify sack count. Ask: "4.5 sack ($155/yd) or 5 sack ($160/yd)?"
 - CONCRETE FEES (automatically added to invoice — always quote these accurately):
-  - 5 yards or less: $350 Short Load Fee is added. No delivery fee.
-  - 6–10 yards: $70 Concrete Truck Delivery fee is added. No short load fee.
-  - 11+ yards: No additional fee.
+  - 5 yards or less: $350 Short Load Fee (1 flat fee). No delivery fee.
+  - 6+ yards: $70 Concrete Truck Delivery fee per 10 yards, rounded up. Examples: 10 yds = 1 fee ($70), 11 yds = 2 fees ($140), 20 yds = 2 fees ($140), 30 yds = 3 fees ($210). Always quote the correct total.
+  - Concrete is ALWAYS delivered — there is no pickup option for concrete.
   - Always include the applicable fee when quoting a concrete total so the customer knows the full cost.
 - CONCRETE product ID varies: always match the exact name including PSI and sack count.
 
