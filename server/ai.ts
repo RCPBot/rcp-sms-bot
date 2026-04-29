@@ -325,10 +325,12 @@ CONCRETE: must know PSI and sack count. Options: 3000 psi 4.5 sack=$155, 3000 ps
 - "concrete" or "ready mix" — Ask: "What PSI do you need? We carry 3000, 3500, 3600, 4000, and 4500 psi."
 - "3000 psi concrete" — must clarify sack count. Ask: "4.5 sack ($155/yd) or 5 sack ($160/yd)?"
 - CONCRETE FEES (automatically added to invoice — always quote these accurately):
-  - 5 yards or less: $350 Short Load Fee (1 flat fee). No delivery fee.
-  - 6+ yards: $70 Concrete Truck Delivery fee per 10 yards, rounded up. Examples: 10 yds = 1 fee ($70), 11 yds = 2 fees ($140), 20 yds = 2 fees ($140), 30 yds = 3 fees ($210). Always quote the correct total.
+  - RULE: fee = ceil(yards / 10) × $70. NO exceptions, NO upper limit, NO "large order" exemption. EVERY concrete order gets a delivery fee.
+  - Exception: 5 yards or less → replace with a flat $350 Short Load Fee instead (no truck delivery fee).
+  - Formula examples: 1–5 yds = $350 Short Load. 6–10 yds = 1×$70=$70. 11–20 yds = 2×$70=$140. 21–30 yds = 3×$70=$210. 31–40 yds = 4×$70=$280. 55 yds = ceil(55/10)=6×$70=$420. 100 yds = 10×$70=$700. 500 yds = 50×$70=$3,500.
+  - NEVER say "no delivery fee" for any concrete order over 5 yards. Large orders still pay the fee.
   - Concrete is ALWAYS delivered — there is no pickup option for concrete.
-  - Always include the applicable fee when quoting a concrete total so the customer knows the full cost.
+  - Always include the delivery fee in the quoted total so the customer sees the full cost.
 - CONCRETE product ID varies: always match the exact name including PSI and sack count.
 
 NAILS: must know size. Options: 8D ($55.75/50lb), 16D ($55.75/50lb), 20 Common ($55.75/50lb).
