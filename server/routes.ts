@@ -181,6 +181,39 @@ async function startProductSync() {
   }
 }
 
+// ── Shared bundle-breakdown helper ─────────────────────────────────────────
+// Bundle quantities per bar size (20' sticks)
+const REBAR_BUNDLE_SIZES: Record<string, number> = {
+  "#3": 266, "#4": 150, "#5": 96, "#6": 68,
+  "#7": 49, "#8": 49, "#9": 49, "#10": 49, "#11": 49,
+};
+
+function addBundleDesc(item: LineItem): LineItem {
+  // Only applies to rebar line items — skip fabrication, delivery, custom, rings, etc.
+  if (item.qboItemId === "1010000301" || item.qboItemId === "CUSTOM") return item;
+  // Must look like a rebar product: name contains #3–#11
+  const sizeMatch = item.name.match(/(#(\d+))/);
+  if (!sizeMatch) return item;
+  const barSize = sizeMatch[1];
+  const bundleSize = REBAR_BUNDLE_SIZES[barSize];
+  if (!bundleSize) return item;
+  const pcs = Math.round(item.qty);
+  if (pcs <= 0) return item;
+  const fullBundles = Math.floor(pcs / bundleSize);
+  const remainder = pcs % bundleSize;
+  let bundleDesc: string;
+  if (fullBundles > 0 && remainder > 0) {
+    bundleDesc = `${fullBundles} full bundle${fullBundles > 1 ? "s" : ""} (${fullBundles * bundleSize} pcs) + ${remainder} loose pcs = ${pcs} pcs total`;
+  } else if (fullBundles > 0) {
+    bundleDesc = `${fullBundles} full bundle${fullBundles > 1 ? "s" : ""} = ${pcs} pcs total`;
+  } else {
+    bundleDesc = `${pcs} loose pcs (less than 1 full bundle)`;
+  }
+  const existingDesc = item.description ? `${item.description} | ` : "";
+  return { ...item, description: `${existingDesc}${bundleDesc}` };
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 export function registerRoutes(httpServer: Server, app: Express) {
   // Register the token-export endpoint FIRST to guarantee no catch-all/static
   // middleware can intercept it. Returns JSON of current QBO refresh token state.
@@ -1012,35 +1045,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
       let paymentLink: string | null = null;
 
       // Bundle counts per bar size (20' bars)
-      const BUNDLE_SIZES: Record<string, number> = {
-        "#3": 266, "#4": 150, "#5": 96, "#6": 68,
-        "#7": 50, "#8": 38, "#9": 30, "#10": 24, "#11": 18, "#14": 10, "#18": 6
-      };
-
-      // Enrich line item descriptions with bundle + piece breakdown for warehouse
-      function addBundleDesc(item: LineItem): LineItem {
-        // Skip fabrication, delivery, custom items
-        if (item.qboItemId === "1010000301" || item.qboItemId === "CUSTOM") return item;
-        // Parse bar size from name (e.g. "Rebar #4 20'" → "#4")
-        const sizeMatch = item.name.match(/(#\d+)/);
-        if (!sizeMatch) return item;
-        const barSize = sizeMatch[1];
-        const bundleSize = BUNDLE_SIZES[barSize];
-        if (!bundleSize) return item;
-        const pcs = Math.round(item.qty);
-        const fullBundles = Math.floor(pcs / bundleSize);
-        const remainder = pcs % bundleSize;
-        let bundleDesc = "";
-        if (fullBundles > 0 && remainder > 0) {
-          bundleDesc = `${fullBundles} full bundle${fullBundles > 1 ? "s" : ""} (${fullBundles * bundleSize} pcs) + ${remainder} individual pcs — ${pcs} pcs total`;
-        } else if (fullBundles > 0) {
-          bundleDesc = `${fullBundles} full bundle${fullBundles > 1 ? "s" : ""} — ${pcs} pcs total`;
-        } else {
-          bundleDesc = `${pcs} individual pcs (no full bundles)`;
-        }
-        const existingDesc = item.description ? `${item.description} | ` : "";
-        return { ...item, description: `${existingDesc}${bundleDesc}` };
-      }
+      // addBundleDesc defined at module level — see top of registerRoutes
 
       if (qboCustomerId && isQboConfigured()) {
         const SMS_CONCRETE_QBO_IDS = new Set(["34", "32", "33", "40", "35", "36", "31"]);
@@ -2003,6 +2008,9 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
           amount: Math.round(qty * exactPrice * 100) / 100,
         };
       });
+
+      // Enrich rebar line items with bundle breakdown for warehouse
+      lineItems.forEach((item, i) => { lineItems[i] = addBundleDesc(item); });
 
       const subtotal = lineItems.reduce((s, l) => s + l.amount, 0);
 
