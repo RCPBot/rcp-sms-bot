@@ -33,12 +33,12 @@ export async function sendSms(to: string, body: string): Promise<void> {
 
 // ── Email fallback when SMS is blocked ───────────────────────────────────────
 function getEmailTransporter() {
-  const service = process.env.EMAIL_SERVICE;
-  const user = process.env.EMAIL_USER;
-  const pass = process.env.EMAIL_PASS;
-  if (service && user && pass) {
-    return nodemailer.createTransport({ service, auth: { user, pass } });
+  const user = process.env.GMAIL_USER || process.env.EMAIL_USER;
+  const pass = process.env.GMAIL_APP_PASSWORD || process.env.EMAIL_PASS;
+  if (user && pass) {
+    return nodemailer.createTransport({ service: "gmail", auth: { user, pass } });
   }
+  console.warn("[Email] No email credentials configured (GMAIL_USER/GMAIL_APP_PASSWORD not set)");
   return null;
 }
 
@@ -55,7 +55,7 @@ export async function sendPaymentLinkEmail(params: {
     return;
   }
   await transporter.sendMail({
-    from: process.env.EMAIL_USER || "noreply@rebarconcreteproducts.com",
+    from: process.env.GMAIL_USER || process.env.EMAIL_USER || "noreply@rebarconcreteproducts.com",
     to: params.to,
     subject: `Your Rebar Concrete Products Invoice #${params.invoiceNumber} — Pay Online`,
     text: [
@@ -188,7 +188,7 @@ export async function sendStaffOrderNotification(params: {
     for (const email of STAFF_EMAILS) {
       try {
         await transporter.sendMail({
-          from: process.env.EMAIL_USER || "noreply@rebarconcreteproducts.com",
+          from: process.env.GMAIL_USER || process.env.EMAIL_USER || "noreply@rebarconcreteproducts.com",
           to: email,
           subject: `🔔 New ${sourceLabel} — Invoice #${invoiceNumber} | ${customerName} | $${total.toFixed(2)}`,
           text: emailText,
