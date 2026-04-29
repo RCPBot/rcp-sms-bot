@@ -1663,6 +1663,30 @@ export function registerRoutes(httpServer: Server, app: Express) {
   });
 
   // System status
+  // ── Email diagnostic ────────────────────────────────────────────────────────────────
+  app.get("/api/admin/email-test", async (req, res) => {
+    const to = (req.query.to as string) || "Brian@RebarConcreteProducts.com";
+    const gmailUser = process.env.GMAIL_USER;
+    const gmailPass = process.env.GMAIL_APP_PASSWORD;
+    if (!gmailUser || !gmailPass) {
+      return res.json({ ok: false, error: "GMAIL_USER or GMAIL_APP_PASSWORD not set in Railway env vars", gmailUser: gmailUser || "(not set)", gmailPass: gmailPass ? "(set)" : "(not set)" });
+    }
+    try {
+      const nodemailer = await import("nodemailer");
+      const transporter = nodemailer.default.createTransport({ service: "gmail", auth: { user: gmailUser, pass: gmailPass } });
+      await transporter.verify();
+      const info = await transporter.sendMail({
+        from: `"Rebar Concrete Products" <${gmailUser}>`,
+        to,
+        subject: "RCP SMS Bot — Email Test",
+        text: "This is a test email from the RCP SMS Bot to confirm email delivery is working correctly.",
+      });
+      return res.json({ ok: true, messageId: info.messageId, response: info.response, gmailUser });
+    } catch (err: any) {
+      return res.json({ ok: false, error: err.message, code: err.code, gmailUser });
+    }
+  });
+
   app.get("/api/status", async (_req, res) => {
     res.json({
       twilio: isTwilioConfigured(),
