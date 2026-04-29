@@ -480,26 +480,31 @@ ORDERING RULES
 - For concrete orders: delivery is the only option (no store pickup). For all other products: store pickup is available at the McKinney location. Only ask about pickup vs delivery if it's relevant to calculating a delivery fee.
 - When you have collected all required customer info → use tag [INFO_COMPLETE]
 
+INVOICE vs ESTIMATE (CRITICAL):
+- If the customer asks for an INVOICE, ORDER, or is ready to buy → use [CONFIRM_ORDER]
+- If the customer asks for a QUOTE, ESTIMATE, or PRICING ONLY (not ready to commit) → use [CONFIRM_ESTIMATE]
+- Keywords that mean ESTIMATE: "quote", "estimate", "just a quote", "get a price", "how much would it be", "ballpark", "pricing", "just checking prices"
+- Keywords that mean INVOICE: "order", "invoice", "buy", "place an order", "I want to order", "create an invoice"
+- When unsure, ask: "Would you like a formal estimate emailed to you, or are you ready to place an order and create an invoice?"
+
 INVOICE CONFIRMATION (CRITICAL — read carefully):
-After you have quoted a price AND the customer has specified pickup or delivery, you MUST end your message with an EXPLICIT question about creating the invoice. Use one of these (or similar): "Shall I go ahead and create your invoice?" / "Would you like me to create the invoice now?" / "Want me to create your invoice?"
+After you have quoted a price AND the customer has specified pickup or delivery, you MUST end your message with an EXPLICIT question. If they asked for an estimate/quote, ask: "Shall I go ahead and send you a formal estimate?" If they are ordering, ask: "Shall I go ahead and create your invoice?"
 
-DO NOT end with vague closers like "Great! You can pick up at..." or "Let me know if you want to proceed" — those are NOT explicit asks and the customer's "yes" won't be recognized. You MUST literally ask about creating the invoice.
+DO NOT end with vague closers like "Great! You can pick up at..." or "Let me know if you want to proceed" — those are NOT explicit asks. You MUST literally ask.
 
-Once you've asked that question, the customer's next affirmative reply means CREATE THE INVOICE. When the customer replies with ANY of these (after you asked about creating the invoice) → you MUST use [CONFIRM_ORDER]:
-- yes / yeah / yep / yup / ya
-- ok / okay / k
-- sure / go ahead / do it / let's do it
-- confirm / confirmed / yes confirm / please confirm
-- please / yes please
-- sounds good / looks good / that works
-- correct / that's right / right
-- create it / make it / go / proceed
+Once you've asked, the customer's affirmative reply triggers the appropriate action:
+- For INVOICES → [CONFIRM_ORDER] at the START of your response
+- For ESTIMATES → [CONFIRM_ESTIMATE] at the START of your response
 
-ADDITIONALLY, if the customer ever asks directly — "create an invoice", "make an invoice", "create the invoice", "can you create an invoice", "send me an invoice", "what's my invoice number", "invoice me", etc. — you MUST use [CONFIRM_ORDER] immediately. Do NOT ask them to confirm again; they've already asked. Just create it.
+Affirmatives: yes, yeah, yep, ok, okay, sure, go ahead, do it, sounds good, looks good, correct, that's right, create it, confirm, please, proceed
 
-FORMAT: [CONFIRM_ORDER] must appear at the very START of your response, before any text. Example:
+Direct requests:
+- "create an invoice" / "invoice me" / "send me an invoice" → [CONFIRM_ORDER] immediately
+- "send me a quote" / "email me an estimate" / "send the estimate" → [CONFIRM_ESTIMATE] immediately
+
+FORMAT: Tag MUST be first. Example:
 "[CONFIRM_ORDER]On it — your invoice will be ready in just a moment."
-NOT: "Great! [CONFIRM_ORDER] ..." — the tag MUST be first.
+"[CONFIRM_ESTIMATE]On it — your estimate will be emailed to you shortly."
 
 TAX RULE (CRITICAL):
 - McKinney, TX sales tax is 8.25%. ALWAYS apply this to every quote and order summary.
@@ -674,6 +679,7 @@ CONVERSATION CLOSING:
 export type AIIntent =
   | { type: "message"; text: string }
   | { type: "confirm_order"; text: string }
+  | { type: "confirm_estimate"; text: string }
   | { type: "info_complete"; text: string }
   | { type: "calc_delivery"; text: string; address: string }
   | { type: "plan_takeoff"; text: string }
@@ -755,6 +761,10 @@ export async function processMessage(
 
   if (rawText.includes("[CONFIRM_ORDER]")) {
     return { type: "confirm_order", text: rawText.replace("[CONFIRM_ORDER]", "").trim() };
+  }
+
+  if (rawText.includes("[CONFIRM_ESTIMATE]")) {
+    return { type: "confirm_estimate", text: rawText.replace("[CONFIRM_ESTIMATE]", "").trim() };
   }
 
   if (rawText.includes("[INFO_COMPLETE]")) {

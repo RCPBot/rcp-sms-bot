@@ -2,7 +2,7 @@ import type { Express } from "express";
 import type { Server } from "http";
 import express from "express";
 import { storage } from "./storage";
-import { sendSms, isTwilioConfigured, sendPaymentLinkEmail, sendStaffOrderNotification, sendVerificationCode } from "./sms";
+import { sendSms, isTwilioConfigured, sendPaymentLinkEmail, sendEstimateEmail, sendStaffOrderNotification, sendVerificationCode } from "./sms";
 import { processMessage, extractOrderFromConversation, extractCustomerInfo, isAiConfigured } from "./ai";
 import { syncProducts, findOrCreateCustomer, findExistingCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice, updateRailwayEnvVar, setLiveRefreshToken, getOrCreateBotCustomer, getQboItems, getInvoiceById } from "./qbo";
 import { performTakeoff } from "./takeoff";
@@ -955,6 +955,102 @@ export function registerRoutes(httpServer: Server, app: Express) {
         await sendSms(cleanPhone, verifyMsg);
         console.log(`[Verify] SMS verification code sent to ${cleanPhone} before invoice creation`);
         // ───────────────────────────────────────────────────────────────────────
+      }
+
+      if (intent.type === "confirm_estimate") {
+        // ── Create QBO Estimate for quote/pricing requests ───────────────────────
+        // No verification gate needed for estimates — they are read-only and
+        // contain no payment info. Create immediately and email the link.
+        console.log(`[Estimate] Creating QBO estimate for SMS customer ${cleanPhone}`);
+        try {
+          const msgs = await storage.getMessages(conv.id);
+          const products = (await storage.getAllProducts()).filter(p => p.unitPrice !== null).slice(0, 80);
+          const orderData = await extractOrderFromConversation(msgs, products);
+
+          if (!orderData.lineItems || orderData.lineItems.length === 0) {
+            const noItemsMsg = "I couldn't find any items for the estimate. Could you tell me what products you'd like quoted?";
+            await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: noItemsMsg });
+            await sendSms(cleanPhone, noItemsMsg);
+            return;
+          }
+
+          // Filter to valid items and override prices from DB
+          const FAB_QBO_ID_EST = "1010000301";
+          const validEstItems = orderData.lineItems.filter((item: any) => {
+            const id = String(item.qboItemId || "");
+            return id && id !== "null" && id !== "" && /^\d+$/.test(id);
+          });
+          validEstItems.forEach((item: any) => {
+            if (item.qboItemId !== FAB_QBO_ID_EST) {
+              const dbProduct = products.find((p: any) => String(p.qboItemId) === String(item.qboItemId));
+              if (dbProduct && dbProduct.unitPrice !== null) {
+                const exactPrice = parseFloat(String(dbProduct.unitPrice));
+                if (!isNaN(exactPrice)) item.unitPrice = exactPrice;
+              }
+            }
+            item.amount = item.qty * item.unitPrice;
+          });
+
+          if (validEstItems.length === 0) {
+            const noValidMsg = "I wasn't able to match all items to our product catalog. Please call us at 469-631-7730 to get an estimate.";
+            await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: noValidMsg });
+            await sendSms(cleanPhone, noValidMsg);
+            return;
+          }
+
+          const subtotal = validEstItems.reduce((s: number, i: any) => s + i.amount, 0);
+          const tax = +(subtotal * TAX_RATE).toFixed(2);
+          const total = subtotal + tax;
+
+          let qboCustomerId = conv.qboCustomerId;
+          if (!qboCustomerId && conv.customerEmail && conv.customerName) {
+            qboCustomerId = await findOrCreateCustomer({
+              name: conv.customerName,
+              email: conv.customerEmail,
+              phone: conv.phone,
+              company: conv.customerCompany || undefined,
+            }).catch(() => null);
+            if (qboCustomerId) await storage.updateConversation(conv.id, { qboCustomerId });
+          }
+
+          if (qboCustomerId && isQboConfigured()) {
+            const estimateLineItems = validEstItems.map(addBundleDesc);
+            const est = await createEstimate({
+              customerId: qboCustomerId,
+              customerEmail: conv.customerEmail || undefined,
+              lineItems: estimateLineItems,
+              customerMemo: `PRELIMINARY ESTIMATE — For bidding purposes only. Quoted via SMS. Call 469-631-7730 to place your order.`,
+            });
+
+            // Email the estimate link to the customer
+            if (conv.customerEmail) {
+              sendEstimateEmail({
+                to: conv.customerEmail,
+                customerName: conv.customerName || "Customer",
+                estimateNumber: est.estimateNumber,
+                total,
+                estimateLink: est.estimateLink,
+              }).catch(e => console.error("[Estimate] Email error:", e));
+            }
+
+            const estimateMsg = conv.customerEmail
+              ? `Your estimate #${est.estimateNumber} has been created ($${total.toFixed(2)} incl. tax). We've emailed it to ${conv.customerEmail}. Ready to order? Call 469-631-7730.`
+              : `Your estimate #${est.estimateNumber} has been created ($${total.toFixed(2)} incl. tax). Ready to order? Call 469-631-7730.`;
+            await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: estimateMsg });
+            await sendSms(cleanPhone, estimateMsg);
+            console.log(`[Estimate] Estimate #${est.estimateNumber} created for ${cleanPhone} — $${total.toFixed(2)}`);
+          } else {
+            const noQboMsg = "Your estimate has been noted. We'll email it to you shortly. Call 469-631-7730 with any questions.";
+            await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: noQboMsg });
+            await sendSms(cleanPhone, noQboMsg);
+          }
+        } catch (estErr: any) {
+          console.error("[Estimate] SMS estimate creation error:", estErr);
+          const errMsg = "We hit a snag creating your estimate. Please call us at 469-631-7730 and we'll get one over to you right away.";
+          await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: errMsg });
+          await sendSms(cleanPhone, errMsg);
+        }
+        // ─────────────────────────────────────────────────────────────────────
       }
 
       if (intent.type === "plan_takeoff") {
@@ -2397,6 +2493,96 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
     }
   });
 
+  // ── Web Estimate endpoint — creates a QBO Estimate from web chat quote requests ──
+  // Called by chat-proxy when [CONFIRM_ESTIMATE] tag is detected in AI response.
+  // Does NOT require SMS verification (estimates are read-only / non-payment).
+  app.post("/api/web-estimate", express.json(), async (req, res) => {
+    try {
+      const { customerName, customerEmail, customerPhone, customerCompany, deliveryAddress, deliveryNotes, items } = req.body;
+
+      if (!customerName || !customerPhone || !Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ error: "customerName, customerPhone, and items are required" });
+      }
+
+      // Look up existing QBO customer (no new customers for estimates either)
+      const customerId = await findExistingCustomer({
+        name: customerName,
+        phone: customerPhone || "",
+        email: customerEmail || undefined,
+      });
+
+      if (!customerId) {
+        return res.status(403).json({
+          error: "customer_not_found",
+          message: `We weren't able to verify an account for "${customerName}" with that phone number. Please call us at 469-631-7730 or stop by 2112 N Custer Rd, McKinney, TX 75071 to get set up.`,
+        });
+      }
+
+      // Build line items with exact DB prices
+      const products = await getQboItems();
+      const lineItems: LineItem[] = items.map((item: any) => {
+        const product = item.qboItemId
+          ? products.find((p: any) => p.id === item.qboItemId)
+          : null;
+        const exactPrice = product ? product.unitPrice : item.unitPrice;
+        const qty = Number(item.qty);
+        return {
+          qboItemId: item.qboItemId || "",
+          name: item.name,
+          description: item.description || "",
+          qty,
+          unitPrice: exactPrice,
+          amount: Math.round(qty * exactPrice * 100) / 100,
+        };
+      });
+
+      // Enrich rebar line items with bundle breakdown
+      lineItems.forEach((item, i) => { lineItems[i] = addBundleDesc(item); });
+
+      const subtotal = lineItems.reduce((s, l) => s + l.amount, 0);
+      const tax = Math.round(subtotal * TAX_RATE * 100) / 100;
+      const total = Math.round((subtotal + tax) * 100) / 100;
+
+      const est = await createEstimate({
+        customerId,
+        customerEmail: customerEmail || undefined,
+        lineItems,
+        customerMemo: [
+          `PRELIMINARY ESTIMATE — For bidding purposes only.`,
+          `Quoted via ai.rebarconcreteproducts.com`,
+          deliveryAddress ? `Delivery address: ${deliveryAddress}` : null,
+          deliveryNotes ? deliveryNotes : null,
+        ].filter(Boolean).join(" | "),
+      });
+
+      // Email the estimate link to the customer
+      if (customerEmail) {
+        sendEstimateEmail({
+          to: customerEmail,
+          customerName,
+          estimateNumber: est.estimateNumber,
+          total,
+          estimateLink: est.estimateLink,
+        }).catch(e => console.warn("[WEB-ESTIMATE] Email error:", e));
+      }
+
+      console.log(`[WEB-ESTIMATE] Estimate #${est.estimateNumber} created for ${customerName} via web chat — $${total}`);
+
+      res.json({
+        success: true,
+        estimateNumber: est.estimateNumber,
+        estimateId: est.estimateId,
+        estimateLink: est.estimateLink,
+        subtotal,
+        tax,
+        total,
+      });
+    } catch (err: any) {
+      console.error("[WEB-ESTIMATE ERROR]", err);
+      res.status(500).json({ error: err.message || "Failed to create estimate" });
+    }
+  });
+
   // ── Send payment link SMS from web chat (no existing invoice yet) ──────────────
   // Body: { phone: "+15551234567" }
   // Sends a simple confirmation SMS so the customer knows their order was received
@@ -2674,23 +2860,35 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       const data = await upstream.json();
       res.setHeader("Access-Control-Allow-Origin", "*");
 
-      // ── Strip internal control tags + order code fences from reply ──
-      const INTERNAL_TAGS = /\[(CONFIRM_ORDER|INFO_COMPLETE|PLAN_TAKEOFF:[^\]]*|CALC_DELIVERY:[^\]]*|LOOKUP_CUSTOMER:[^\]]*|ESTIMATE_READY)\]/g;
+      // ── Strip internal control tags + order/estimate code fences from reply ──
+      const INTERNAL_TAGS = /\[(CONFIRM_ORDER|CONFIRM_ESTIMATE|INFO_COMPLETE|PLAN_TAKEOFF:[^\]]*|CALC_DELIVERY:[^\]]*|LOOKUP_CUSTOMER:[^\]]*|ESTIMATE_READY)\]/g;
       const ORDER_FENCE = /```order\s*([\s\S]*?)```/i;
       const replyField = data.reply ?? data.message ?? data.content ?? data.text;
       let confirmOrderTriggered = false;
+      let confirmEstimateTriggered = false;
       let extractedOrderJson: any = null;
       if (typeof replyField === "string") {
         let cleaned = replyField;
         // Extract order JSON from code fence before stripping it
         const fenceMatch = cleaned.match(ORDER_FENCE);
         if (fenceMatch) {
-          confirmOrderTriggered = true;
-          try { extractedOrderJson = JSON.parse(fenceMatch[1].trim()); } catch {}
+          // Determine if this is an invoice or estimate based on readyToInvoice flag
+          try {
+            const parsedJson = JSON.parse(fenceMatch[1].trim());
+            extractedOrderJson = parsedJson;
+            if (parsedJson.readyToEstimate === true) {
+              confirmEstimateTriggered = true;
+            } else {
+              confirmOrderTriggered = true;
+            }
+          } catch {
+            confirmOrderTriggered = true; // default to invoice if parse fails
+          }
           cleaned = cleaned.replace(ORDER_FENCE, "").replace(/\n{3,}/g, "\n\n").trim();
         }
-        // Strip [CONFIRM_ORDER] and other internal tags
+        // Strip [CONFIRM_ORDER] / [CONFIRM_ESTIMATE] and other internal tags
         if (cleaned.includes("[CONFIRM_ORDER]")) confirmOrderTriggered = true;
+        if (cleaned.includes("[CONFIRM_ESTIMATE]")) confirmEstimateTriggered = true;
         cleaned = cleaned.replace(INTERNAL_TAGS, "").replace(/  +/g, " ").trim();
         if (data.reply !== undefined)   data.reply   = cleaned;
         if (data.message !== undefined) data.message = cleaned;
@@ -2835,6 +3033,76 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
           ).catch(err => console.warn("[chat-proxy] SMS fallback failed:", err));
         }
         data.confirmOrderTriggered = true;
+      } else if (confirmEstimateTriggered && extractedOrderJson) {
+        // ── [CONFIRM_ESTIMATE] with order JSON — create QBO Estimate (no verification gate) ──
+        try {
+          const estimatePayload = {
+            ...extractedOrderJson,
+            customerName: extractedOrderJson.customerName || req.body?.customerName || "",
+            customerPhone: extractedOrderJson.customerPhone || req.body?.customerPhone || "",
+            customerEmail: extractedOrderJson.customerEmail || req.body?.customerEmail || "",
+          };
+          const origin = `${req.protocol}://${req.get('host')}`;
+          const estResp = await fetch(`${origin}/api/web-estimate`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              customerName: estimatePayload.customerName,
+              customerEmail: estimatePayload.customerEmail,
+              customerPhone: estimatePayload.customerPhone,
+              customerCompany: estimatePayload.customerCompany || "",
+              deliveryAddress: estimatePayload.deliveryAddress || "",
+              deliveryNotes: estimatePayload.deliveryNotes || "",
+              items: estimatePayload.items || [],
+            }),
+          });
+          const estData = await estResp.json();
+
+          if (estData.error === "customer_not_found") {
+            const errorMsg = "I wasn't able to locate an account matching your name and phone number in our system. To receive estimates by email, you'll need an account on file — please stop by our store at 2112 N Custer Rd, McKinney, TX or call us at 469-631-7730.";
+            if (data.reply !== undefined)   data.reply   = errorMsg;
+            if (data.message !== undefined) data.message = errorMsg;
+            if (data.content !== undefined) data.content = errorMsg;
+            if (data.text !== undefined)    data.text    = errorMsg;
+          } else if (estData.estimateNumber) {
+            data.confirmEstimateTriggered = true;
+            data.estimateNumber = estData.estimateNumber;
+            data.estimateLink = estData.estimateLink;
+            data.total = estData.total;
+            // Send SMS confirmation if phone available
+            const rawEstPhone: string = estimatePayload.customerPhone || "";
+            const cleanEstPhone = rawEstPhone.replace(/\D/g, "");
+            if (cleanEstPhone.length >= 10 && isTwilioConfigured()) {
+              const estE164 = cleanEstPhone.startsWith("1") ? "+" + cleanEstPhone : "+1" + cleanEstPhone;
+              const estimateEmail = estimatePayload.customerEmail;
+              sendSms(
+                estE164,
+                estimateEmail
+                  ? `Rebar Concrete Products: Your estimate #${estData.estimateNumber} is ready ($${Number(estData.total).toFixed(2)}). Check your email at ${estimateEmail} for the full estimate. Call 469-631-7730 to place your order.`
+                  : `Rebar Concrete Products: Your estimate #${estData.estimateNumber} is ready ($${Number(estData.total).toFixed(2)}). Call 469-631-7730 to review it or place your order.`
+              ).catch(e => console.error("[chat-proxy] Estimate SMS error:", e));
+            }
+          } else {
+            data.confirmEstimateTriggered = true;
+          }
+        } catch (estBgErr) {
+          console.error("[chat-proxy] Estimate creation error:", estBgErr);
+          data.confirmEstimateTriggered = true;
+        }
+      } else if (confirmEstimateTriggered) {
+        // [CONFIRM_ESTIMATE] tag only (no order JSON) — basic SMS acknowledgement
+        const rawPhone: string = req.body?.customerPhone || "";
+        const cleanedPhone = rawPhone.replace(/\D/g, "");
+        if (cleanedPhone.length >= 10 && isTwilioConfigured()) {
+          const e164 = cleanedPhone.startsWith("1") ? "+" + cleanedPhone : "+1" + cleanedPhone;
+          sendSms(
+            e164,
+            "Rebar Concrete Products: Your estimate request was received. " +
+            "We will email your estimate shortly. " +
+            "Call 469-631-7730 with any questions."
+          ).catch(err => console.warn("[chat-proxy] Estimate SMS fallback failed:", err));
+        }
+        data.confirmEstimateTriggered = true;
       }
 
       res.json(data);
