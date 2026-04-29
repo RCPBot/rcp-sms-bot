@@ -113,3 +113,91 @@ export function validateTwilioRequest(
   if (process.env.NODE_ENV !== "production") return true;
   return twilio.validateRequest(process.env.TWILIO_AUTH_TOKEN, signature, url, params);
 }
+
+// ── Staff notification on paid invoice ───────────────────────────────────────
+const STAFF_PHONES = ["+19452765415", "+14698257551"];
+const STAFF_EMAILS = ["Brian@RebarConcreteProducts.com", "Office@RebarConcreteProducts.com"];
+
+export async function sendStaffOrderNotification(params: {
+  invoiceNumber: string;
+  customerName: string;
+  total: number;
+  deliveryAddress: string;
+  memo: string;
+  lines: Array<{ name: string; qty: number; amount: number }>;
+}): Promise<void> {
+  const { invoiceNumber, customerName, total, deliveryAddress, memo, lines } = params;
+
+  // Build concise line-item summary (max ~10 lines to keep SMS readable)
+  const itemLines = lines
+    .slice(0, 10)
+    .map(l => `  • ${l.qty > 1 ? l.qty + "x " : ""}${l.name}: $${l.amount.toFixed(2)}`)
+    .join("\n");
+  const moreItems = lines.length > 10 ? `\n  ...and ${lines.length - 10} more items` : "";
+
+  const deliveryLine = deliveryAddress ? `\nDeliver to: ${deliveryAddress}` : "";
+  const memoLine = memo ? `\nNotes: ${memo}` : "";
+
+  const smsBody = [
+    `🔔 NEW PAID ORDER — Invoice #${invoiceNumber}`,
+    `Customer: ${customerName}`,
+    `Total: $${total.toFixed(2)}`,
+    deliveryLine,
+    memoLine,
+    ``,
+    `Items:`,
+    itemLines,
+    moreItems,
+    ``,
+    `View in QBO: https://qbo.intuit.com/app/invoice`,
+  ].filter(l => l !== undefined).join("\n").trim();
+
+  const emailHtml = `
+    <h2 style="color:#C8D400;background:#1a1a1a;padding:16px;margin:0;">🔔 New Paid Order — Invoice #${invoiceNumber}</h2>
+    <table style="width:100%;font-family:sans-serif;font-size:14px;border-collapse:collapse;">
+      <tr><td style="padding:8px 16px;font-weight:bold;">Customer</td><td style="padding:8px 16px;">${customerName}</td></tr>
+      <tr style="background:#f9f9f9;"><td style="padding:8px 16px;font-weight:bold;">Total</td><td style="padding:8px 16px;">$${total.toFixed(2)}</td></tr>
+      ${deliveryAddress ? `<tr><td style="padding:8px 16px;font-weight:bold;">Deliver To</td><td style="padding:8px 16px;">${deliveryAddress}</td></tr>` : ""}
+      ${memo ? `<tr style="background:#f9f9f9;"><td style="padding:8px 16px;font-weight:bold;">Notes</td><td style="padding:8px 16px;">${memo}</td></tr>` : ""}
+    </table>
+    <h3 style="padding:8px 16px;">Items</h3>
+    <ul style="font-family:sans-serif;font-size:14px;">
+      ${lines.map(l => `<li>${l.qty > 1 ? l.qty + "x " : ""}${l.name} — $${l.amount.toFixed(2)}</li>`).join("")}
+    </ul>
+    <p style="padding:8px 16px;"><a href="https://qbo.intuit.com/app/invoice" style="background:#C8D400;color:#111;padding:10px 20px;border-radius:4px;text-decoration:none;font-weight:bold;">View in QuickBooks</a></p>
+    <hr/><p style="color:#888;font-size:12px;padding:8px 16px;">Rebar Concrete Products | 2112 N Custer Rd, McKinney TX 75071 | (469) 631-7730</p>
+  `;
+
+  const emailText = smsBody;
+
+  // Send SMS to all staff phones
+  for (const phone of STAFF_PHONES) {
+    try {
+      await sendSms(phone, smsBody);
+      console.log(`[StaffNotify] SMS sent to ${phone} for invoice #${invoiceNumber}`);
+    } catch (err: any) {
+      console.error(`[StaffNotify] SMS failed to ${phone}:`, err?.message);
+    }
+  }
+
+  // Send email to all staff emails
+  const transporter = getEmailTransporter();
+  if (transporter) {
+    for (const email of STAFF_EMAILS) {
+      try {
+        await transporter.sendMail({
+          from: process.env.EMAIL_USER || "noreply@rebarconcreteproducts.com",
+          to: email,
+          subject: `🔔 New Paid Order — Invoice #${invoiceNumber} | ${customerName} | $${total.toFixed(2)}`,
+          text: emailText,
+          html: emailHtml,
+        });
+        console.log(`[StaffNotify] Email sent to ${email} for invoice #${invoiceNumber}`);
+      } catch (err: any) {
+        console.error(`[StaffNotify] Email failed to ${email}:`, err?.message);
+      }
+    }
+  } else {
+    console.warn("[StaffNotify] No email transport configured — staff email skipped");
+  }
+}

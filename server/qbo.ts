@@ -820,3 +820,43 @@ export function isQboConfigured(): boolean {
   const { clientId, clientSecret, refreshToken, realmId } = cfg();
   return !!(clientId && clientSecret && refreshToken && realmId);
 }
+
+// ── Fetch a single invoice by QBO invoice ID ────────────────────────────────
+export async function getInvoiceById(invoiceId: string): Promise<{
+  invoiceNumber: string;
+  customerName: string;
+  customerEmail: string;
+  total: number;
+  balance: number;
+  status: string;
+  deliveryAddress: string;
+  memo: string;
+  lines: Array<{ name: string; qty: number; amount: number }>;
+} | null> {
+  try {
+    const data = await qboGet(`/invoice/${invoiceId}`);
+    const inv = data?.Invoice;
+    if (!inv) return null;
+    const total = parseFloat(inv.TotalAmt || "0");
+    const balance = parseFloat(inv.Balance || "0");
+    const status = balance <= 0 ? "Paid" : inv.EmailStatus === "EmailSent" ? "Sent" : "Open";
+    const customerName = inv.CustomerRef?.name || "Unknown Customer";
+    const customerEmail = inv.BillEmail?.Address || "";
+    const shipAddr = inv.ShipAddr;
+    const deliveryAddress = shipAddr
+      ? [shipAddr.Line1, shipAddr.City, shipAddr.CountrySubDivisionCode, shipAddr.PostalCode].filter(Boolean).join(", ")
+      : "";
+    const memo = inv.CustomerMemo?.value || "";
+    const lines = (inv.Line || [])
+      .filter((l: any) => l.DetailType === "SalesItemLineDetail")
+      .map((l: any) => ({
+        name: l.SalesItemLineDetail?.ItemRef?.name || "",
+        qty: l.SalesItemLineDetail?.Qty || 0,
+        amount: parseFloat(l.Amount || "0"),
+      }));
+    return { invoiceNumber: inv.DocNumber || inv.Id, customerName, customerEmail, total, balance, status, deliveryAddress, memo, lines };
+  } catch (err) {
+    console.error(`[QBO] getInvoiceById(${invoiceId}) failed:`, err);
+    return null;
+  }
+}

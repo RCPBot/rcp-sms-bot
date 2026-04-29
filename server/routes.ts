@@ -2,9 +2,9 @@ import type { Express } from "express";
 import type { Server } from "http";
 import express from "express";
 import { storage } from "./storage";
-import { sendSms, isTwilioConfigured, sendPaymentLinkEmail } from "./sms";
+import { sendSms, isTwilioConfigured, sendPaymentLinkEmail, sendStaffOrderNotification } from "./sms";
 import { processMessage, extractOrderFromConversation, extractCustomerInfo, isAiConfigured } from "./ai";
-import { syncProducts, findOrCreateCustomer, findExistingCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice, updateRailwayEnvVar, setLiveRefreshToken, getOrCreateBotCustomer, getQboItems } from "./qbo";
+import { syncProducts, findOrCreateCustomer, findExistingCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice, updateRailwayEnvVar, setLiveRefreshToken, getOrCreateBotCustomer, getQboItems, getInvoiceById } from "./qbo";
 import { performTakeoff } from "./takeoff";
 import { resolveLinksFromText, extractUrls } from "./link-resolver";
 import { generateCutSheetPdf, emailCutSheet, emailCutSheetToCustomer, generatePlacementDrawingPdf, forwardPlansToOffice, generateBidPdf, emailBidPdf, OFFICE_EMAIL } from "./cutsheet";
@@ -13,6 +13,7 @@ import type { LineItem } from "@shared/schema";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import * as crypto from "crypto";
 
 const OWNER_EMAIL = "maddoxconstruction1987@gmail.com";
 const TAX_RATE = 0.0825; // McKinney, TX: 8.25% combined sales tax
@@ -183,6 +184,77 @@ async function startProductSync() {
 export function registerRoutes(httpServer: Server, app: Express) {
   // Register the token-export endpoint FIRST to guarantee no catch-all/static
   // middleware can intercept it. Returns JSON of current QBO refresh token state.
+
+  // ── QBO Webhook — invoice paid notification ────────────────────────────────
+  // Register this URL in the Intuit Developer Portal under your app's webhooks:
+  //   POST https://<your-railway-url>/api/qbo/webhook
+  // Set QBO_WEBHOOK_TOKEN env var to the verifier token Intuit provides.
+  // QBO signs each request with HMAC-SHA256 using that token.
+  // Deduplication: we track processed notification IDs in memory (per process).
+  const processedQboNotifications = new Set<string>();
+
+  app.post('/api/qbo/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+    // 1. Verify signature
+    const webhookToken = process.env.QBO_WEBHOOK_TOKEN || "";
+    if (webhookToken) {
+      const signature = req.headers['intuit-signature'] as string || "";
+      const payload = req.body as Buffer;
+      const expected = crypto.createHmac('sha256', webhookToken).update(payload).digest('base64');
+      if (signature !== expected) {
+        console.warn('[QBO Webhook] Signature mismatch — rejecting request');
+        return res.status(401).json({ error: 'Invalid signature' });
+      }
+    }
+
+    // 2. Parse payload
+    let body: any;
+    try {
+      body = JSON.parse((req.body as Buffer).toString('utf8'));
+    } catch {
+      return res.status(400).json({ error: 'Invalid JSON' });
+    }
+
+    // 3. Respond immediately — QBO requires a fast 200 response
+    res.status(200).send('OK');
+
+    // 4. Process notifications in background
+    (async () => {
+      try {
+        const entities: any[] = body?.eventNotifications?.[0]?.dataChangeEvent?.entities || [];
+        for (const entity of entities) {
+          if (entity.name !== 'Invoice') continue;
+          const invoiceId = String(entity.id);
+          const operation = entity.operation; // Create, Update, Delete, Merge, Void
+          // Only care about updates (payment changes balance to 0)
+          if (operation !== 'Update' && operation !== 'Create') continue;
+          // Deduplicate
+          const dedupeKey = `${invoiceId}-${entity.lastUpdated || Date.now()}`;
+          if (processedQboNotifications.has(dedupeKey)) continue;
+          processedQboNotifications.add(dedupeKey);
+          // Keep set size bounded
+          if (processedQboNotifications.size > 500) {
+            const first = processedQboNotifications.values().next().value;
+            if (first) processedQboNotifications.delete(first);
+          }
+          // Fetch the invoice to check if it's paid
+          const invoice = await getInvoiceById(invoiceId);
+          if (!invoice) continue;
+          if (invoice.status !== 'Paid') continue; // not paid yet — skip
+          console.log(`[QBO Webhook] Invoice #${invoice.invoiceNumber} PAID — notifying staff`);
+          await sendStaffOrderNotification({
+            invoiceNumber: invoice.invoiceNumber,
+            customerName: invoice.customerName,
+            total: invoice.total,
+            deliveryAddress: invoice.deliveryAddress,
+            memo: invoice.memo,
+            lines: invoice.lines,
+          });
+        }
+      } catch (err) {
+        console.error('[QBO Webhook] Background processing error:', err);
+      }
+    })();
+  });
 
   // GET /api/qbo/items — returns all active QBO items with live pricing
   app.get('/api/qbo/items', async (_req, res) => {
