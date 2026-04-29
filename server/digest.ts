@@ -15,10 +15,17 @@ const OFFICE_EMAIL = "Office@RebarConcreteProducts.com";
 
 // ── Email transporter (reuse same setup as cutsheet.ts) ──────────────────────
 function getTransporter(): nodemailer.Transporter | null {
+  // Primary: GMAIL_USER + GMAIL_APP_PASSWORD (same as sms.ts)
+  const gmailUser = process.env.GMAIL_USER;
+  const gmailPass = process.env.GMAIL_APP_PASSWORD;
+  if (gmailUser && gmailPass) {
+    return nodemailer.createTransport({ service: "gmail", auth: { user: gmailUser, pass: gmailPass } });
+  }
+
+  // Fallback: legacy EMAIL_SERVICE / EMAIL_USER / EMAIL_PASS
   const service = process.env.EMAIL_SERVICE;
   const user    = process.env.EMAIL_USER;
   const pass    = process.env.EMAIL_PASS;
-
   if (service && user && pass) {
     return nodemailer.createTransport({ service, auth: { user, pass } });
   }
