@@ -2513,63 +2513,66 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
 
       // ── If order was confirmed, create QBO invoice + SMS payment link ──
       if (confirmOrderTriggered && extractedOrderJson) {
-        // Fire invoice creation in the background — don't block the chat reply
-        (async () => {
-          try {
-            // Merge customer identity fields from req.body into the AI-generated order payload
-            // (the AI's order JSON doesn't include customerEmail — we inject it here)
-            const orderPayload = {
-              ...extractedOrderJson,
-              customerName: extractedOrderJson.customerName || req.body?.customerName || "",
-              customerPhone: extractedOrderJson.customerPhone || req.body?.customerPhone || "",
-              customerEmail: extractedOrderJson.customerEmail || req.body?.customerEmail || "",
-            };
-            // Phone from the order JSON (AI always includes it) or fallback from request body
-            const rawPhone: string = orderPayload.customerPhone || "";
-            const cleanedPhone = rawPhone.replace(/\D/g, "");
-            const e164 = cleanedPhone.startsWith("1") ? "+" + cleanedPhone : "+1" + cleanedPhone;
+        try {
+          // Merge customer identity fields from req.body into the AI-generated order payload
+          // (the AI's order JSON doesn't include customerEmail — we inject it here)
+          const orderPayload = {
+            ...extractedOrderJson,
+            customerName: extractedOrderJson.customerName || req.body?.customerName || "",
+            customerPhone: extractedOrderJson.customerPhone || req.body?.customerPhone || "",
+            customerEmail: extractedOrderJson.customerEmail || req.body?.customerEmail || "",
+          };
+          const rawPhone: string = orderPayload.customerPhone || "";
+          const cleanedPhone = rawPhone.replace(/\D/g, "");
+          const e164 = cleanedPhone.startsWith("1") ? "+" + cleanedPhone : "+1" + cleanedPhone;
 
-            // POST to our own /api/web-order to create QBO invoice
-            const origin = `${req.protocol}://${req.get('host')}`;
-            const orderResp = await fetch(`${origin}/api/web-order`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(orderPayload),
-            });
-            const orderData = await orderResp.json();
+          // POST to our own /api/web-order to create QBO invoice (await so we can inject error into reply)
+          const origin = `${req.protocol}://${req.get('host')}`;
+          const orderResp = await fetch(`${origin}/api/web-order`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(orderPayload),
+          });
+          const orderData = await orderResp.json();
 
-            if (orderData.paymentLink && cleanedPhone.length >= 10 && isTwilioConfigured()) {
-              // SMS the real payment link
-              await sendSms(
+          if (orderData.error === "customer_not_found") {
+            // Inject error message directly into the chat reply so the widget shows it
+            const errorMsg = "I wasn't able to locate an account matching your name and phone number in our system. To place orders online, you'll need an account on file — please stop by our store at 2112 N Custer Rd, McKinney, TX or call us at 469-631-7730 to get set up. It only takes a few minutes!";
+            if (data.reply !== undefined)   data.reply   = errorMsg;
+            if (data.message !== undefined) data.message = errorMsg;
+            if (data.content !== undefined) data.content = errorMsg;
+            if (data.text !== undefined)    data.text    = errorMsg;
+            console.warn(`[chat-proxy] customer_not_found for: ${orderPayload.customerName} / ${orderPayload.customerPhone}`);
+          } else if (orderData.paymentLink) {
+            // Invoice created — SMS the payment link
+            data.confirmOrderTriggered = true;
+            data.invoiceNumber = orderData.invoiceNumber;
+            data.paymentLink = orderData.paymentLink;
+            data.total = orderData.total;
+            if (cleanedPhone.length >= 10 && isTwilioConfigured()) {
+              sendSms(
                 e164,
                 `Rebar Concrete Products: Your invoice #${orderData.invoiceNumber} is ready. ` +
                 `Total: $${Number(orderData.total).toFixed(2)}. ` +
                 `Pay here: ${orderData.paymentLink}`
-              );
+              ).catch(e => console.error("[chat-proxy] SMS error:", e));
               console.log(`[chat-proxy] Payment link SMS sent to ${e164} for invoice #${orderData.invoiceNumber}`);
-            } else if (orderData.error === "customer_not_found") {
-              // Can't create invoice — notify staff
-              console.warn(`[chat-proxy] Web order customer not found: ${JSON.stringify(orderPayload).substring(0,200)}`);
-              if (cleanedPhone.length >= 10 && isTwilioConfigured()) {
-                await sendSms(
-                  e164,
-                  "Rebar Concrete Products: We received your order but couldn't locate your account. " +
-                  "Please call 469-631-7730 and we'll get you set up right away."
-                );
-              }
-            } else if (!orderData.paymentLink && cleanedPhone.length >= 10 && isTwilioConfigured()) {
-              await sendSms(
+            }
+          } else {
+            data.confirmOrderTriggered = true;
+            if (cleanedPhone.length >= 10 && isTwilioConfigured()) {
+              sendSms(
                 e164,
                 "Rebar Concrete Products: Your order was received. " +
                 "We're preparing your invoice and will send a payment link shortly. " +
                 "Questions? Call 469-631-7730."
-              );
+              ).catch(e => console.error("[chat-proxy] SMS error:", e));
             }
-          } catch (bgErr) {
-            console.error("[chat-proxy] Background invoice/SMS error:", bgErr);
           }
-        })();
-        data.confirmOrderTriggered = true;
+        } catch (bgErr) {
+          console.error("[chat-proxy] Invoice creation error:", bgErr);
+          data.confirmOrderTriggered = true; // still flag it so widget doesn't retry
+        }
       } else if (confirmOrderTriggered) {
         // [CONFIRM_ORDER] tag only (no order JSON) — send basic acknowledgement SMS if phone present
         const rawPhone: string = req.body?.customerPhone || "";
