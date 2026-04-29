@@ -13,7 +13,7 @@ import type { LineItem } from "@shared/schema";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import * as crypto from "crypto";
+
 
 const OWNER_EMAIL = "maddoxconstruction1987@gmail.com";
 const TAX_RATE = 0.0825; // McKinney, TX: 8.25% combined sales tax
@@ -185,78 +185,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
   // Register the token-export endpoint FIRST to guarantee no catch-all/static
   // middleware can intercept it. Returns JSON of current QBO refresh token state.
 
-  // ── QBO Webhook — invoice paid notification ────────────────────────────────
-  // Register this URL in the Intuit Developer Portal under your app's webhooks:
-  //   POST https://<your-railway-url>/api/qbo/webhook
-  // Set QBO_WEBHOOK_TOKEN env var to the verifier token Intuit provides.
-  // QBO signs each request with HMAC-SHA256 using that token.
-  // Deduplication: we track processed notification IDs in memory (per process).
-  const processedQboNotifications = new Set<string>();
-
-  app.post('/api/qbo/webhook', async (req, res) => {
-    // 1. Verify signature using rawBody captured by global express.json() verify hook
-    const webhookToken = process.env.QBO_WEBHOOK_TOKEN || "";
-    if (webhookToken) {
-      const signature = req.headers['intuit-signature'] as string || "";
-      const rawBuf = (req as any).rawBody as Buffer | undefined;
-      if (rawBuf) {
-        const expected = crypto.createHmac('sha256', webhookToken).update(rawBuf).digest('base64');
-        if (signature !== expected) {
-          console.warn('[QBO Webhook] Signature mismatch — rejecting request');
-          return res.status(401).json({ error: 'Invalid signature' });
-        }
-      }
-    }
-
-    // 2. Body already parsed by global express.json()
-    const body = req.body;
-    if (!body) {
-      return res.status(400).json({ error: 'Invalid JSON' });
-    }
-
-    // 3. Respond immediately — QBO requires a fast 200 response
-    res.status(200).send('OK');
-
-    // 4. Process notifications in background
-    (async () => {
-      try {
-        const entities: any[] = body?.eventNotifications?.[0]?.dataChangeEvent?.entities || [];
-        for (const entity of entities) {
-          if (entity.name !== 'Invoice') continue;
-          const invoiceId = String(entity.id);
-          const operation = entity.operation; // Create, Update, Delete, Merge, Void
-          // Only care about updates (payment changes balance to 0)
-          if (operation !== 'Update' && operation !== 'Create') continue;
-          // Deduplicate
-          const dedupeKey = `${invoiceId}-${entity.lastUpdated || Date.now()}`;
-          if (processedQboNotifications.has(dedupeKey)) continue;
-          processedQboNotifications.add(dedupeKey);
-          // Keep set size bounded
-          if (processedQboNotifications.size > 500) {
-            const first = processedQboNotifications.values().next().value;
-            if (first) processedQboNotifications.delete(first);
-          }
-          // Fetch the invoice to check if it's paid
-          const invoice = await getInvoiceById(invoiceId);
-          if (!invoice) continue;
-          if (invoice.status !== 'Paid') continue; // not paid yet — skip
-          console.log(`[QBO Webhook] Invoice #${invoice.invoiceNumber} PAID — notifying staff`);
-          await sendStaffOrderNotification({
-            invoiceNumber: invoice.invoiceNumber,
-            customerName: invoice.customerName,
-            total: invoice.total,
-            deliveryAddress: invoice.deliveryAddress,
-            memo: invoice.memo,
-            lines: invoice.lines,
-          });
-        }
-      } catch (err) {
-        console.error('[QBO Webhook] Background processing error:', err);
-      }
-    })();
-  });
-
-  // GET /api/qbo/items — returns all active QBO items with live pricing
+  // GET /api/qbo/items  // GET /api/qbo/items — returns all active QBO items with live pricing
   app.get('/api/qbo/items', async (_req, res) => {
     try {
       if (!isQboConfigured()) {
@@ -1176,6 +1105,16 @@ export function registerRoutes(httpServer: Server, app: Express) {
           invoiceNumber = `${concreteInvoice.invoiceNumber} & ${materialsInvoice.invoiceNumber}`;
           paymentLink = materialsInvoice.paymentLink;
           console.log(`[Order] Split invoices — Concrete #${concreteInvoice.invoiceNumber}, Materials #${materialsInvoice.invoiceNumber}`);
+          // Notify staff — bot-created order
+          sendStaffOrderNotification({
+            invoiceNumber,
+            customerName: conv.customerName || "Customer",
+            total,
+            deliveryAddress: cleanDeliveryAddress || "",
+            memo: rawNotes,
+            lines: allQboItems.map(i => ({ name: i.name, qty: i.qty, amount: i.amount })),
+            source: "sms",
+          }).catch(e => console.error("[StaffNotify] Error:", e));
         } else {
           // Single-type order — create one invoice as before
           const invoice = await createInvoice({
@@ -1195,6 +1134,16 @@ export function registerRoutes(httpServer: Server, app: Express) {
           invoiceId = invoice.invoiceId;
           invoiceNumber = invoice.invoiceNumber;
           paymentLink = invoice.paymentLink;
+          // Notify staff — bot-created order
+          sendStaffOrderNotification({
+            invoiceNumber,
+            customerName: conv.customerName || "Customer",
+            total,
+            deliveryAddress: cleanDeliveryAddress || "",
+            memo: orderData.notes || "",
+            lines: allQboItems.map(i => ({ name: i.name, qty: i.qty, amount: i.amount })),
+            source: "sms",
+          }).catch(e => console.error("[StaffNotify] Error:", e));
         }
       }
 
@@ -2167,6 +2116,17 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
         paymentLink = materialsInv.paymentLink;
         console.log(`[WEB-ORDER] Split invoices — Concrete #${concreteInv.invoiceNumber} ($${concreteSubtotal.toFixed(2)}), Materials #${materialsInv.invoiceNumber} ($${materialsSubtotal.toFixed(2)}) for ${customerName}`);
 
+        // Notify staff — web-chat-created order
+        sendStaffOrderNotification({
+          invoiceNumber,
+          customerName,
+          total,
+          deliveryAddress: deliveryAddress || "",
+          memo: deliveryNotes || "",
+          lines: lineItems.map(i => ({ name: i.name, qty: i.qty, amount: i.amount })),
+          source: "web",
+        }).catch(e => console.error("[StaffNotify] Web-order error:", e));
+
         // Email both invoice numbers to customer
         if (customerEmail) {
           try {
@@ -2196,6 +2156,17 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
         invoiceId = singleInvoice.invoiceId;
         invoiceNumber = singleInvoice.invoiceNumber;
         paymentLink = singleInvoice.paymentLink;
+
+        // Notify staff — web-chat-created order
+        sendStaffOrderNotification({
+          invoiceNumber,
+          customerName,
+          total,
+          deliveryAddress: deliveryAddress || "",
+          memo: deliveryNotes || "",
+          lines: lineItems.map(i => ({ name: i.name, qty: i.qty, amount: i.amount })),
+          source: "web",
+        }).catch(e => console.error("[StaffNotify] Web-order error:", e));
 
         // Email invoice link to customer
         if (customerEmail) {

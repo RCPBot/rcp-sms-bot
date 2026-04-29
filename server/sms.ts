@@ -125,8 +125,10 @@ export async function sendStaffOrderNotification(params: {
   deliveryAddress: string;
   memo: string;
   lines: Array<{ name: string; qty: number; amount: number }>;
+  source?: string; // "sms" | "web"
 }): Promise<void> {
-  const { invoiceNumber, customerName, total, deliveryAddress, memo, lines } = params;
+  const { invoiceNumber, customerName, total, deliveryAddress, memo, lines, source } = params;
+  const sourceLabel = source === "web" ? "WEB CHAT ORDER" : "SMS BOT ORDER";
 
   // Build concise line-item summary (max ~10 lines to keep SMS readable)
   const itemLines = lines
@@ -139,7 +141,7 @@ export async function sendStaffOrderNotification(params: {
   const memoLine = memo ? `\nNotes: ${memo}` : "";
 
   const smsBody = [
-    `🔔 NEW PAID ORDER — Invoice #${invoiceNumber}`,
+    `🔔 NEW ${sourceLabel} — Invoice #${invoiceNumber}`,
     `Customer: ${customerName}`,
     `Total: $${total.toFixed(2)}`,
     deliveryLine,
@@ -153,7 +155,7 @@ export async function sendStaffOrderNotification(params: {
   ].filter(l => l !== undefined).join("\n").trim();
 
   const emailHtml = `
-    <h2 style="color:#C8D400;background:#1a1a1a;padding:16px;margin:0;">🔔 New Paid Order — Invoice #${invoiceNumber}</h2>
+    <h2 style="color:#C8D400;background:#1a1a1a;padding:16px;margin:0;">🔔 New ${sourceLabel} — Invoice #${invoiceNumber}</h2>
     <table style="width:100%;font-family:sans-serif;font-size:14px;border-collapse:collapse;">
       <tr><td style="padding:8px 16px;font-weight:bold;">Customer</td><td style="padding:8px 16px;">${customerName}</td></tr>
       <tr style="background:#f9f9f9;"><td style="padding:8px 16px;font-weight:bold;">Total</td><td style="padding:8px 16px;">$${total.toFixed(2)}</td></tr>
@@ -188,7 +190,7 @@ export async function sendStaffOrderNotification(params: {
         await transporter.sendMail({
           from: process.env.EMAIL_USER || "noreply@rebarconcreteproducts.com",
           to: email,
-          subject: `🔔 New Paid Order — Invoice #${invoiceNumber} | ${customerName} | $${total.toFixed(2)}`,
+          subject: `🔔 New ${sourceLabel} — Invoice #${invoiceNumber} | ${customerName} | $${total.toFixed(2)}`,
           text: emailText,
           html: emailHtml,
         });
