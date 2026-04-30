@@ -4,7 +4,7 @@ import express from "express";
 import { storage } from "./storage";
 import { sendSms, isTwilioConfigured, sendPaymentLinkEmail, sendEstimateEmail, sendStaffOrderNotification, sendVerificationCode } from "./sms";
 import { processMessage, extractOrderFromConversation, extractCustomerInfo, isAiConfigured } from "./ai";
-import { syncProducts, findOrCreateCustomer, findExistingCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice, updateRailwayEnvVar, setLiveRefreshToken, getOrCreateBotCustomer, getOrCreateEstCustomer, getQboItems, getInvoiceById } from "./qbo";
+import { syncProducts, findOrCreateCustomer, findExistingCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice, updateRailwayEnvVar, setLiveRefreshToken, getOrCreateBotCustomer, getOrCreateEstCustomer, getQboItems, getInvoiceById, getPurchaseOrders } from "./qbo";
 import { performTakeoff } from "./takeoff";
 import { resolveLinksFromText, extractUrls } from "./link-resolver";
 import { generateCutSheetPdf, emailCutSheet, emailCutSheetToCustomer, generatePlacementDrawingPdf, forwardPlansToOffice, generateBidPdf, emailBidPdf, OFFICE_EMAIL } from "./cutsheet";
@@ -248,6 +248,48 @@ export function registerRoutes(httpServer: Server, app: Express) {
       }
       const items = await getQboItems();
       res.json({ count: items.length, items, fetchedAt: new Date().toISOString() });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // GET /api/qbo/purchase-orders?vendor=cowtown&days=25
+  // Returns all POs from specified vendor in the last N days, flagging unreceived ones
+  app.get('/api/qbo/purchase-orders', async (req, res) => {
+    try {
+      if (!isQboConfigured()) return res.status(503).json({ error: 'QBO not configured' });
+      const vendor = (req.query.vendor as string) || 'cowtown';
+      const days = parseInt((req.query.days as string) || '25', 10);
+      const since = new Date();
+      since.setDate(since.getDate() - days);
+      const sinceDate = since.toISOString().split('T')[0];
+      const pos = await getPurchaseOrders({ vendorNameContains: vendor, sinceDate });
+      const results = pos.map((po: any) => ({
+        id: po.Id,
+        poNumber: po.DocNumber,
+        date: po.TxnDate,
+        vendor: po.VendorRef?.name,
+        status: po.POStatus,
+        received: po.POStatus === 'Closed',
+        totalAmt: po.TotalAmt,
+        memo: po.Memo,
+        lines: (po.Line || []).filter((l: any) => l.DetailType === 'ItemBasedExpenseLineDetail').map((l: any) => ({
+          item: l.ItemBasedExpenseLineDetail?.ItemRef?.name,
+          qty: l.ItemBasedExpenseLineDetail?.Qty,
+          unitPrice: l.ItemBasedExpenseLineDetail?.UnitPrice,
+          amount: l.Amount,
+        })),
+      }));
+      const unreceived = results.filter((r: any) => !r.received);
+      res.json({
+        vendor,
+        sinceDate,
+        total: results.length,
+        unreceivedCount: unreceived.length,
+        unreceived,
+        all: results,
+        fetchedAt: new Date().toISOString(),
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

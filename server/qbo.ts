@@ -131,6 +131,27 @@ async function qboGet(path: string) {
   return res.json();
 }
 
+// Fetch purchase orders — optionally filtered by vendor name substring and date range
+export async function getPurchaseOrders(opts: {
+  vendorNameContains?: string;
+  sinceDate?: string; // YYYY-MM-DD
+} = {}): Promise<any[]> {
+  let sql = `SELECT * FROM PurchaseOrder MAXRESULTS 200`;
+  const clauses: string[] = [];
+  if (opts.sinceDate) clauses.push(`TxnDate >= '${opts.sinceDate}'`);
+  if (clauses.length) sql = `SELECT * FROM PurchaseOrder WHERE ${clauses.join(' AND ')} ORDERBY TxnDate DESC MAXRESULTS 200`;
+  const encoded = encodeURIComponent(sql);
+  const data = await qboGet(`/query?query=${encoded}`);
+  let pos: any[] = data.QueryResponse?.PurchaseOrder || [];
+  if (opts.vendorNameContains) {
+    const needle = opts.vendorNameContains.toLowerCase();
+    pos = pos.filter((po: any) =>
+      (po.VendorRef?.name || '').toLowerCase().includes(needle)
+    );
+  }
+  return pos;
+}
+
 // Fetch shareable invoice/estimate link via include=invoiceLink (works without QBO Payments)
 async function getShareableLink(type: "invoice" | "estimate", id: string): Promise<string | null> {
   try {
