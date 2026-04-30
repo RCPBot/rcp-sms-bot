@@ -3249,19 +3249,86 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
           data.confirmEstimateTriggered = true;
         }
       } else if (confirmEstimateTriggered) {
-        // [CONFIRM_ESTIMATE] tag only (no order JSON) — basic SMS acknowledgement
-        const rawPhone: string = req.body?.customerPhone || "";
-        const cleanedPhone = rawPhone.replace(/\D/g, "");
-        if (cleanedPhone.length >= 10 && isTwilioConfigured()) {
-          const e164 = cleanedPhone.startsWith("1") ? "+" + cleanedPhone : "+1" + cleanedPhone;
-          sendSms(
-            e164,
-            "Rebar Concrete Products: Your estimate request was received. " +
-            "We will email your estimate shortly. " +
-            "Call 469-631-7730 with any questions."
-          ).catch(err => console.warn("[chat-proxy] Estimate SMS fallback failed:", err));
+        // [CONFIRM_ESTIMATE] tag only (no order JSON) — ask EstimatingBot to re-emit the JSON block
+        console.warn("[chat-proxy] CONFIRM_ESTIMATE with no JSON block — requesting JSON from EstimatingBot");
+        try {
+          const messagesForRetry: any[] = [
+            ...(req.body?.messages || []),
+            { role: "assistant", content: data.reply ?? data.message ?? data.content ?? data.text ?? "" },
+            {
+              role: "user",
+              content: "Please emit the estimate JSON block now so the system can create it. Output ONLY the ```order ... ``` block with readyToEstimate: true and all item details filled in — nothing else."
+            }
+          ];
+          const retryUpstream = await fetch("https://ai.rebarconcreteproducts.com/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              messages: messagesForRetry,
+              customerName: req.body?.customerName || "",
+              customerEmail: req.body?.customerEmail || "",
+              customerPhone: req.body?.customerPhone || "",
+            }),
+          });
+          if (retryUpstream.ok) {
+            const retryData = await retryUpstream.json();
+            const retryReply: string = retryData.reply ?? retryData.message ?? retryData.content ?? retryData.text ?? "";
+            const retryFence = retryReply.match(/```order\s*([\s\S]*?)```/i);
+            if (retryFence) {
+              try {
+                const retryJson = JSON.parse(retryFence[1].trim());
+                if (retryJson.items?.length) {
+                  const retryPayload = {
+                    ...retryJson,
+                    customerName: retryJson.customerName || req.body?.customerName || "",
+                    customerPhone: retryJson.customerPhone || req.body?.customerPhone || "",
+                    customerEmail: retryJson.customerEmail || req.body?.customerEmail || "",
+                  };
+                  const origin = `${req.protocol}://${req.get('host')}`;
+                  const estResp = await fetch(`${origin}/api/web-estimate`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      customerName: retryPayload.customerName,
+                      customerEmail: retryPayload.customerEmail,
+                      customerPhone: retryPayload.customerPhone,
+                      customerCompany: retryPayload.customerCompany || "",
+                      deliveryAddress: retryPayload.deliveryAddress || "",
+                      deliveryNotes: retryPayload.deliveryNotes || "",
+                      items: retryPayload.items || [],
+                    }),
+                  });
+                  const estData = await estResp.json();
+                  if (estData.estimateNumber) {
+                    data.confirmEstimateTriggered = true;
+                    data.estimateNumber = estData.estimateNumber;
+                    data.estimateLink = estData.estimateLink;
+                    data.total = estData.total;
+                    console.log(`[chat-proxy] Retry estimate created: #${estData.estimateNumber}`);
+                  } else {
+                    console.error("[chat-proxy] Retry estimate creation returned no estimateNumber:", estData);
+                    data.confirmEstimateTriggered = true;
+                  }
+                } else {
+                  console.error("[chat-proxy] Retry JSON had no items:", retryJson);
+                  data.confirmEstimateTriggered = true;
+                }
+              } catch (parseErr) {
+                console.error("[chat-proxy] Failed to parse retry JSON:", parseErr);
+                data.confirmEstimateTriggered = true;
+              }
+            } else {
+              console.error("[chat-proxy] Retry response had no JSON block:", retryReply.substring(0, 200));
+              data.confirmEstimateTriggered = true;
+            }
+          } else {
+            console.error("[chat-proxy] Retry upstream failed:", retryUpstream.status);
+            data.confirmEstimateTriggered = true;
+          }
+        } catch (retryErr) {
+          console.error("[chat-proxy] Retry estimate error:", retryErr);
+          data.confirmEstimateTriggered = true;
         }
-        data.confirmEstimateTriggered = true;
       }
 
       res.json(data);
