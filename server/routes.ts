@@ -3618,9 +3618,30 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
   });
 
   // ── /api/admin/digest — trigger daily digest manually or via cron ──────────
+  // On the 1st of every month, also fires the PO audit email automatically.
   app.post("/api/admin/digest", async (_req, res) => {
     try {
       const result = await sendDailyDigest();
+
+      // Monthly PO audit — fire on 1st of every month
+      const today = new Date();
+      if (today.getUTCDate() === 1) {
+        try {
+          console.log('[Digest] 1st of month detected — triggering monthly PO audit...');
+          const auditRes = await fetch(`http://localhost:${process.env.PORT || 5000}/api/admin/po-audit`, {
+            method: 'POST',
+          });
+          const auditData = await auditRes.json() as { sent?: boolean; error?: string };
+          if (auditData.sent) {
+            console.log('[Digest] Monthly PO audit email sent successfully.');
+          } else {
+            console.error('[Digest] Monthly PO audit failed:', auditData.error);
+          }
+        } catch (auditErr: any) {
+          console.error('[Digest] Monthly PO audit error:', auditErr.message);
+        }
+      }
+
       res.json(result);
     } catch (err: any) {
       console.error("[Digest] Error sending digest:", err);
