@@ -325,11 +325,7 @@ ANCHOR BOLTS: must know size and whether galvanized.
 BAR TIES (box of 5,000): must know length. Options: 4" ($33.05), 4.5" ($35.05), 5" ($38.05), 6" ($46.05), 6.5" ($47.05).
 - "bar ties" or "tie wire box" — Ask: "What length? 4", 4.5", 5", 6", or 6.5"?"
 
-TIE WIRE (loose): three separate products — must clarify format:
-- Tie Wire Roll 16.5ga = $4.99/roll (single small roll)
-- Tie Wire Reel = $35.99/reel (larger reel)
-- Tie Wire Boxes = $95.50 (bulk box)
-- "tie wire" — Ask: "What format? Single roll ($4.99), reel ($35.99), or bulk box ($95.50)?"
+TIE WIRE (loose): "tie wire" or "tie wire roll" = Tie Wire Roll 16.5ga at $4.99/roll — quote immediately, do NOT ask about format. Only offer Reel ($35.99) or Bulk Box ($95.50) if the customer specifically says "reel" or "bulk box".
 
 METAL STAKES: must know length. Options: 18" ($4.45), 24" ($4.85), 36" ($5.10).
 - "metal stakes" — Ask: "What length — 18", 24", or 36"?"
@@ -337,8 +333,7 @@ METAL STAKES: must know length. Options: 18" ($4.45), 24" ($4.85), 36" ($5.10).
 WOOD STAKES: must know size. Options: 12" 1x2 50pk ($13.37), 18" 1x3 30pk ($24.90), 24" 1x3 ($33.10), 30" 1x3 ($43.20), 36" 1x3 ($51.50), 2x2x24" ($19.25), 2x2x36" ($33.59).
 - "wood stakes" — Ask: "What size and style? 1x2, 1x3, or 2x2 — and what length?"
 
-SMOOTH DOWELS: must know diameter. Options: 1/2" ($1.45), 5/8" ($2.15), 3/4" ($3.12), 7/8" ($4.24) each.
-- "smooth dowels" — Ask: "What diameter — 1/2", 5/8", 3/4", or 7/8"?"
+SMOOTH DOWELS: "dowel" or "smooth dowel" always means smooth dowel bars, 2' each. Must confirm diameter. Options: 1/2" (#4)=$1.45, 5/8" (#5)=$2.15, 3/4" (#6)=$3.12, 7/8" (#7)=$4.24 each. If customer says "#4 dowel", "#5 dowel", etc. — match to diameter automatically. NEVER confuse dowels with rebar.
 
 DOWEL CAPS: must know size. Options: 1/2" ($0.30), 5/8" ($0.36), 3/4" ($0.41), 1" available.
 - "dowel caps" — Ask: "What size dowel caps?"
@@ -405,9 +400,9 @@ BOOTS: must know size:
 
 EPOXY: When a customer asks for "epoxy", "epoxy adhesive", "concrete epoxy", or any epoxy product — they ALWAYS mean SpecPoxy 3000 (QBO name: "SpecPoxy 3000 EPOXY"). Quote it immediately, do not ask for clarification.
 
-REDWOOD: Sold EXCLUSIVELY as concrete expansion joint material to prevent cracking in concrete slabs and flatwork. This is NOT forming lumber, NOT decking, NOT landscaping, NOT siding. If a customer asks what it is used for, say ONLY: "We sell redwood as expansion joint material for concrete construction — it goes between concrete sections to allow for expansion and prevent cracking."
-- Must know width: 4" ($10.95) or 6" ($14.45)
-- "redwood" — Ask: "4" or 6" wide?"
+REDWOOD: Sold EXCLUSIVELY as concrete expansion joint material. NOT forming lumber, NOT decking, NOT landscaping.
+- Must know width ONLY if not specified. If customer says "1 redwood 6\"" or "redwood 6" — take quantity at face value and quote immediately, do NOT ask "did you mean 1 piece?". 4"=$10.95, 6"=$14.45
+- If no width given: Ask "4\" or 6\" wide?"
 
 LUMBER (dimensional): We sell exactly ONE SKU per size — always 16' length, fixed grade. NEVER ask about length — all lumber is 16' ONLY. NEVER ask about grade or any other variable. Quote immediately:
 - 2x4 (or 2x4x16') → $8.89/board
