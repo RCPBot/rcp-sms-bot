@@ -2370,21 +2370,30 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       // Build line items with exact DB prices
       const products = await getQboItems();
       const lineItems: LineItem[] = items.map((item: any) => {
-        // Look up exact unit price from QBO if item has a qboItemId
-        const product = item.qboItemId
-          ? products.find((p: any) => p.id === item.qboItemId)
+        // Resolve product by qboItemId first, then fall back to name match
+        let product = item.qboItemId
+          ? products.find((p: any) => String(p.id) === String(item.qboItemId))
           : null;
+        if (!product && item.name) {
+          product = products.find((p: any) =>
+            p.name?.toLowerCase() === item.name?.toLowerCase()
+          );
+        }
         const exactPrice = product ? product.unitPrice : item.unitPrice;
+        const resolvedQboId = product ? String(product.id) : (item.qboItemId && item.qboItemId !== "" ? String(item.qboItemId) : null);
+        if (!resolvedQboId) {
+          console.warn(`[WEB-ORDER] No QBO item ID found for: ${item.name} — skipping line item`);
+        }
         const qty = Number(item.qty);
         return {
-          qboItemId: item.qboItemId || "",
+          qboItemId: resolvedQboId || "",
           name: item.name,
           description: item.description || "",
           qty,
           unitPrice: exactPrice,
           amount: Math.round(qty * exactPrice * 100) / 100,
         };
-      });
+      }).filter((item: LineItem) => item.qboItemId !== "");
 
       // Enrich rebar line items with bundle breakdown for warehouse
       lineItems.forEach((item, i) => { lineItems[i] = addBundleDesc(item); });
@@ -2618,20 +2627,30 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       // Build line items with exact DB prices
       const products = await getQboItems();
       const lineItems: LineItem[] = items.map((item: any) => {
-        const product = item.qboItemId
-          ? products.find((p: any) => p.id === item.qboItemId)
+        // Resolve product by qboItemId first, then fall back to name match
+        let product = item.qboItemId
+          ? products.find((p: any) => String(p.id) === String(item.qboItemId))
           : null;
+        if (!product && item.name) {
+          product = products.find((p: any) =>
+            p.name?.toLowerCase() === item.name?.toLowerCase()
+          );
+        }
         const exactPrice = product ? product.unitPrice : item.unitPrice;
+        const resolvedQboId = product ? String(product.id) : (item.qboItemId && item.qboItemId !== "" ? String(item.qboItemId) : null);
+        if (!resolvedQboId) {
+          console.warn(`[WEB-ESTIMATE] No QBO item ID found for: ${item.name} — skipping line item`);
+        }
         const qty = Number(item.qty);
         return {
-          qboItemId: item.qboItemId || "",
+          qboItemId: resolvedQboId || "",
           name: item.name,
           description: item.description || "",
           qty,
           unitPrice: exactPrice,
           amount: Math.round(qty * exactPrice * 100) / 100,
         };
-      });
+      }).filter((item: LineItem) => item.qboItemId !== "");
 
       // Enrich rebar line items with bundle breakdown
       lineItems.forEach((item, i) => { lineItems[i] = addBundleDesc(item); });
