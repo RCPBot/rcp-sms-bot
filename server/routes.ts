@@ -310,6 +310,10 @@ export function registerRoutes(httpServer: Server, app: Express) {
       since.setDate(since.getDate() - days);
       const sinceDate = since.toISOString().split('T')[0];
       const pos = await getPurchaseOrders({ vendorNameContains: vendor, sinceDate });
+      const rawMode = req.query.raw === '1';
+      if (rawMode) {
+        return res.json({ pos: pos.map((po: any) => ({ poNumber: po.DocNumber, memo: po.Memo, lines: po.Line })) });
+      }
       const results = pos.map((po: any) => ({
         id: po.Id,
         poNumber: po.DocNumber,
@@ -321,11 +325,11 @@ export function registerRoutes(httpServer: Server, app: Express) {
         memo: po.Memo,
         lines: (po.Line || []).map((l: any) => ({
           type: l.DetailType,
-          description: l.Description,
-          item: l.ItemBasedExpenseLineDetail?.ItemRef?.name || l.AccountBasedExpenseLineDetail?.AccountRef?.name,
-          qty: l.ItemBasedExpenseLineDetail?.Qty,
-          unitPrice: l.ItemBasedExpenseLineDetail?.UnitPrice,
-          amount: l.Amount,
+          description: l.Description || l.ItemBasedExpenseLineDetail?.Description || null,
+          item: l.ItemBasedExpenseLineDetail?.ItemRef?.name || l.AccountBasedExpenseLineDetail?.AccountRef?.name || null,
+          qty: l.ItemBasedExpenseLineDetail?.Qty || null,
+          unitPrice: l.ItemBasedExpenseLineDetail?.UnitPrice || null,
+          amount: l.Amount || null,
         })),
       }));
       const unreceived = results.filter((r: any) => !r.received);
