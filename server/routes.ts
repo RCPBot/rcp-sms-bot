@@ -4,7 +4,7 @@ import express from "express";
 import { storage } from "./storage";
 import { sendSms, isTwilioConfigured, sendPaymentLinkEmail, sendEstimateEmail, sendStaffOrderNotification, sendVerificationCode } from "./sms";
 import { processMessage, extractOrderFromConversation, extractCustomerInfo, isAiConfigured } from "./ai";
-import { syncProducts, findOrCreateCustomer, findExistingCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice, updateRailwayEnvVar, setLiveRefreshToken, getOrCreateBotCustomer, getQboItems, getInvoiceById } from "./qbo";
+import { syncProducts, findOrCreateCustomer, findExistingCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice, updateRailwayEnvVar, setLiveRefreshToken, getOrCreateBotCustomer, getOrCreateEstCustomer, getQboItems, getInvoiceById } from "./qbo";
 import { performTakeoff } from "./takeoff";
 import { resolveLinksFromText, extractUrls } from "./link-resolver";
 import { generateCutSheetPdf, emailCutSheet, emailCutSheetToCustomer, generatePlacementDrawingPdf, forwardPlansToOffice, generateBidPdf, emailBidPdf, OFFICE_EMAIL } from "./cutsheet";
@@ -2500,22 +2500,25 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
     try {
       const { customerName, customerEmail, customerPhone, customerCompany, deliveryAddress, deliveryNotes, items } = req.body;
 
-      if (!customerName || !customerPhone || !Array.isArray(items) || items.length === 0) {
-        return res.status(400).json({ error: "customerName, customerPhone, and items are required" });
+      if (!Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ error: "items are required" });
       }
 
-      // Look up existing QBO customer (no new customers for estimates either)
-      const customerId = await findExistingCustomer({
-        name: customerName,
-        phone: customerPhone || "",
-        email: customerEmail || undefined,
-      });
+      // Try to find an existing account — if not found, fall back to the generic EST customer
+      let customerId: string | null = null;
+      let usingEstCustomer = false;
+
+      if (customerName && customerPhone) {
+        customerId = await findExistingCustomer({
+          name: customerName,
+          phone: customerPhone,
+          email: customerEmail || undefined,
+        });
+      }
 
       if (!customerId) {
-        return res.status(403).json({
-          error: "customer_not_found",
-          message: `We weren't able to verify an account for "${customerName}" with that phone number. Please call us at 469-631-7730 or stop by 2112 N Custer Rd, McKinney, TX 75071 to get set up.`,
-        });
+        customerId = await getOrCreateEstCustomer();
+        usingEstCustomer = true;
       }
 
       // Build line items with exact DB prices
@@ -2547,9 +2550,14 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
         customerId,
         customerEmail: customerEmail || undefined,
         lineItems,
+        // For EST (non-account) customers, put name + phone in ship-to so Brian knows who it's for
+        shipToName: usingEstCustomer && customerName ? customerName : undefined,
+        shipToPhone: usingEstCustomer && customerPhone ? customerPhone : undefined,
+        deliveryAddress: deliveryAddress || undefined,
         customerMemo: [
           `PRELIMINARY ESTIMATE — For bidding purposes only.`,
           `Quoted via ai.rebarconcreteproducts.com`,
+          usingEstCustomer && customerName ? `Customer: ${customerName}${customerPhone ? ` / ${customerPhone}` : ""}` : null,
           deliveryAddress ? `Delivery address: ${deliveryAddress}` : null,
           deliveryNotes ? deliveryNotes : null,
         ].filter(Boolean).join(" | "),
@@ -2559,14 +2567,15 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       if (customerEmail) {
         sendEstimateEmail({
           to: customerEmail,
-          customerName,
+          customerName: customerName || "Customer",
           estimateNumber: est.estimateNumber,
           total,
           estimateLink: est.estimateLink,
         }).catch(e => console.warn("[WEB-ESTIMATE] Email error:", e));
       }
 
-      console.log(`[WEB-ESTIMATE] Estimate #${est.estimateNumber} created for ${customerName} via web chat — $${total}`);
+      const label = usingEstCustomer ? `${customerName || "anonymous"} (EST customer)` : customerName;
+      console.log(`[WEB-ESTIMATE] Estimate #${est.estimateNumber} created for ${label} via web chat — $${total}`);
 
       res.json({
         success: true,
@@ -3058,13 +3067,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
           });
           const estData = await estResp.json();
 
-          if (estData.error === "customer_not_found") {
-            const errorMsg = "I wasn't able to locate an account matching your name and phone number in our system. To receive estimates by email, you'll need an account on file — please stop by our store at 2112 N Custer Rd, McKinney, TX or call us at 469-631-7730.";
-            if (data.reply !== undefined)   data.reply   = errorMsg;
-            if (data.message !== undefined) data.message = errorMsg;
-            if (data.content !== undefined) data.content = errorMsg;
-            if (data.text !== undefined)    data.text    = errorMsg;
-          } else if (estData.estimateNumber) {
+          if (estData.estimateNumber) {
             data.confirmEstimateTriggered = true;
             data.estimateNumber = estData.estimateNumber;
             data.estimateLink = estData.estimateLink;

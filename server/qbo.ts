@@ -484,6 +484,7 @@ export async function findOrCreateCustomer(params: {
 // ── Get or create the "BOT" customer in QBO ─────────────────────────────────
 // Used for plan-takeoff estimates that aren't tied to an existing human customer.
 let _botCustomerIdCache: string | null = null;
+let _estCustomerIdCache: string | null = null;
 export async function getOrCreateBotCustomer(): Promise<string> {
   if (_botCustomerIdCache) return _botCustomerIdCache;
   try {
@@ -508,6 +509,34 @@ export async function getOrCreateBotCustomer(): Promise<string> {
     return data.Customer.Id;
   } catch (err) {
     console.error("[QBO] Failed to create BOT customer:", err);
+    throw err;
+  }
+}
+
+export async function getOrCreateEstCustomer(): Promise<string> {
+  if (_estCustomerIdCache) return _estCustomerIdCache;
+  try {
+    const encoded = encodeURIComponent(`SELECT * FROM Customer WHERE DisplayName = 'EST'`);
+    const data = await qboGet(`/query?query=${encoded}`);
+    const customers = data.QueryResponse?.Customer || [];
+    if (customers.length > 0) {
+      _estCustomerIdCache = customers[0].Id;
+      return customers[0].Id;
+    }
+  } catch (err) {
+    console.warn("[QBO] EST customer lookup failed, will attempt create:", err);
+  }
+  try {
+    const data = await qboPost("/customer", {
+      DisplayName: "EST",
+      CompanyName: "Walk-in / Web Estimate",
+      Notes: "Generic customer used for web chat estimates from non-account holders.",
+    });
+    _estCustomerIdCache = data.Customer.Id;
+    console.log(`[QBO] Created EST customer (id=${data.Customer.Id})`);
+    return data.Customer.Id;
+  } catch (err) {
+    console.error("[QBO] Failed to create EST customer:", err);
     throw err;
   }
 }
@@ -608,6 +637,8 @@ export async function createEstimate(params: {
   lineItems: import("@shared/schema").LineItem[];
   customerMemo?: string;
   deliveryAddress?: string;
+  shipToName?: string;
+  shipToPhone?: string;
 }): Promise<{ estimateId: string; estimateNumber: string; estimateLink: string | null }> {
   const lines: any[] = params.lineItems.map((item, idx) => ({
     LineNum: idx + 1,
@@ -633,7 +664,14 @@ export async function createEstimate(params: {
   };
 
   if (params.customerMemo) estimateBody.CustomerMemo = { value: params.customerMemo };
-  if (params.deliveryAddress) estimateBody.ShipAddr = { Line1: params.deliveryAddress };
+  // Build ShipAddr — name/phone for EST customers, delivery address for known customers
+  if (params.shipToName || params.shipToPhone || params.deliveryAddress) {
+    estimateBody.ShipAddr = {
+      ...(params.shipToName ? { Name: params.shipToName } : {}),
+      ...(params.shipToPhone ? { Line1: params.shipToPhone } : {}),
+      ...(params.deliveryAddress ? { Line2: params.deliveryAddress } : {}),
+    };
+  }
 
   const data = await qboPostWithDocRetry("/estimate", estimateBody);
   const estimate = data.Estimate;
