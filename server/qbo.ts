@@ -121,7 +121,7 @@ async function getAccessToken(): Promise<string> {
   return _accessToken!;
 }
 
-async function qboGet(path: string) {
+export async function qboGet(path: string) {
   const { realmId } = cfg();
   const token = await getAccessToken();
   const res = await fetch(`${QB_BASE}/${realmId}${path}`, {

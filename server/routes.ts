@@ -4,7 +4,7 @@ import express from "express";
 import { storage } from "./storage";
 import { sendSms, isTwilioConfigured, sendPaymentLinkEmail, sendEstimateEmail, sendStaffOrderNotification, sendVerificationCode } from "./sms";
 import { processMessage, extractOrderFromConversation, extractCustomerInfo, isAiConfigured } from "./ai";
-import { syncProducts, findOrCreateCustomer, findExistingCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice, updateRailwayEnvVar, setLiveRefreshToken, getOrCreateBotCustomer, getOrCreateEstCustomer, getQboItems, getInvoiceById, getPurchaseOrders } from "./qbo";
+import { syncProducts, findOrCreateCustomer, findExistingCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice, updateRailwayEnvVar, setLiveRefreshToken, getOrCreateBotCustomer, getOrCreateEstCustomer, getQboItems, getInvoiceById, getPurchaseOrders, qboGet } from "./qbo";
 import { performTakeoff } from "./takeoff";
 import { resolveLinksFromText, extractUrls } from "./link-resolver";
 import { generateCutSheetPdf, emailCutSheet, emailCutSheetToCustomer, generatePlacementDrawingPdf, forwardPlansToOffice, generateBidPdf, emailBidPdf, OFFICE_EMAIL } from "./cutsheet";
@@ -248,6 +248,52 @@ export function registerRoutes(httpServer: Server, app: Express) {
       }
       const items = await getQboItems();
       res.json({ count: items.length, items, fetchedAt: new Date().toISOString() });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // GET /api/qbo/invoices-with-item?itemKeyword=concrete&days=25
+  // Returns invoices in last N days that contain a line item matching itemKeyword
+  app.get('/api/qbo/invoices-with-item', async (req, res) => {
+    try {
+      if (!isQboConfigured()) return res.status(503).json({ error: 'QBO not configured' });
+      const keyword = ((req.query.itemKeyword as string) || 'concrete').toLowerCase();
+      const days = parseInt((req.query.days as string) || '25', 10);
+      const since = new Date();
+      since.setDate(since.getDate() - days);
+      const sinceDate = since.toISOString().split('T')[0];
+      const sql = `SELECT * FROM Invoice WHERE TxnDate >= '${sinceDate}' MAXRESULTS 200`;
+      const encoded = encodeURIComponent(sql);
+      const invoiceData = await qboGet(`/query?query=${encoded}`);
+      const invoices: any[] = invoiceData.QueryResponse?.Invoice || [];
+      const matched = invoices
+        .map((inv: any) => {
+          const concreteLines = (inv.Line || [])
+            .filter((l: any) => {
+              const name = (l.SalesItemLineDetail?.ItemRef?.name || '').toLowerCase();
+              return name.includes(keyword);
+            })
+            .map((l: any) => ({
+              item: l.SalesItemLineDetail?.ItemRef?.name,
+              qty: l.SalesItemLineDetail?.Qty,
+              unitPrice: l.SalesItemLineDetail?.UnitPrice,
+              amount: l.Amount,
+            }));
+          if (!concreteLines.length) return null;
+          return {
+            id: inv.Id,
+            invoiceNumber: inv.DocNumber,
+            date: inv.TxnDate,
+            customer: inv.CustomerRef?.name,
+            status: inv.Balance > 0 ? 'Outstanding' : 'Paid',
+            totalAmt: inv.TotalAmt,
+            balance: inv.Balance,
+            concreteLines,
+          };
+        })
+        .filter(Boolean);
+      res.json({ sinceDate, keyword, count: matched.length, invoices: matched, fetchedAt: new Date().toISOString() });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
