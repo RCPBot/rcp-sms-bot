@@ -696,10 +696,15 @@ export async function createEstimate(params: {
   if (params.customerMemo) estimateBody.CustomerMemo = { value: params.customerMemo };
   // Build ShipAddr — name/phone for EST customers, delivery address for known customers
   if (params.shipToName || params.shipToPhone || params.deliveryAddress) {
+    // QBO ShipAddr only supports Line1-Line5, City, State, PostalCode, Country — no Name field
+    const addrLines: string[] = [];
+    if (params.shipToName) addrLines.push(params.shipToName);
+    if (params.shipToPhone) addrLines.push(params.shipToPhone);
+    if (params.deliveryAddress) addrLines.push(params.deliveryAddress);
     estimateBody.ShipAddr = {
-      ...(params.shipToName ? { Name: params.shipToName } : {}),
-      ...(params.shipToPhone ? { Line1: params.shipToPhone } : {}),
-      ...(params.deliveryAddress ? { Line2: params.deliveryAddress } : {}),
+      ...(addrLines[0] ? { Line1: addrLines[0] } : {}),
+      ...(addrLines[1] ? { Line2: addrLines[1] } : {}),
+      ...(addrLines[2] ? { Line3: addrLines[2] } : {}),
     };
   }
 
