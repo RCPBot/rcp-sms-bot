@@ -403,6 +403,8 @@ BOOTS: must know size:
 - Sizes 7, 8, 9, 10 all at $38.65/pair
 - "boots" — Ask: "What size? We carry 7, 8, 9, and 10."
 
+EPOXY: When a customer asks for "epoxy", "epoxy adhesive", "concrete epoxy", or any epoxy product — they ALWAYS mean SpecPoxy 3000 (QBO name: "SpecPoxy 3000 EPOXY"). Quote it immediately, do not ask for clarification.
+
 REDWOOD: Sold EXCLUSIVELY as concrete expansion joint material to prevent cracking in concrete slabs and flatwork. This is NOT forming lumber, NOT decking, NOT landscaping, NOT siding. If a customer asks what it is used for, say ONLY: "We sell redwood as expansion joint material for concrete construction — it goes between concrete sections to allow for expansion and prevent cracking."
 - Must know width: 4" ($10.95) or 6" ($14.45)
 - "redwood" — Ask: "4" or 6" wide?"
