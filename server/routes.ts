@@ -2893,50 +2893,95 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
   <script>
     const API = '/api/chat-proxy';
     const messagesEl = document.getElementById('messages');
-    const inputEl = document.getElementById('user-input');
-    const sendBtn = document.getElementById('send-btn');
+    const inputEl    = document.getElementById('user-input');
+    const sendBtn    = document.getElementById('send-btn');
     let history = [];
     let busy = false;
+    let customerName = '', customerEmail = '', customerPhone = '';
+
     function scrollBottom() { messagesEl.scrollTop = messagesEl.scrollHeight; }
+
     function addBubble(role, text) {
       const wrap = document.createElement('div'); wrap.className = 'msg ' + role;
       const bubble = document.createElement('div'); bubble.className = 'bubble'; bubble.textContent = text;
       wrap.appendChild(bubble); messagesEl.appendChild(wrap); scrollBottom(); return bubble;
     }
+
+    function addPaymentButton(paymentLink, invoiceNumber, total) {
+      const wrap = document.createElement('div'); wrap.className = 'msg bot';
+      const bubble = document.createElement('div'); bubble.className = 'bubble';
+      bubble.innerHTML =
+        '<div style="margin-bottom:8px;font-weight:600;">Invoice #' + invoiceNumber + ' is ready!</div>' +
+        '<div style="margin-bottom:12px;font-size:13px;opacity:0.85;">Total: $' + Number(total).toFixed(2) + '</div>' +
+        '<a href="' + paymentLink + '" target="_blank" rel="noopener" ' +
+        'style="display:inline-block;background:#C8D400;color:#16161d;font-weight:700;padding:10px 20px;border-radius:20px;text-decoration:none;font-size:14px;">Pay Invoice →</a>';
+      wrap.appendChild(bubble); messagesEl.appendChild(wrap); scrollBottom();
+    }
+
     function showTyping() {
       const wrap = document.createElement('div'); wrap.className = 'msg bot'; wrap.id = 'typing-indicator';
       const bubble = document.createElement('div'); bubble.className = 'bubble';
       bubble.innerHTML = '<span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span>';
       wrap.appendChild(bubble); messagesEl.appendChild(wrap); scrollBottom();
     }
+
     function removeTyping() { const el = document.getElementById('typing-indicator'); if (el) el.remove(); }
-    async function sendMessage() {
+
+    function extractIdentity(text) {
+      const emailMatch = text.match(/[\w.+-]+@[\w-]+\.[a-z]{2,}/i);
+      if (emailMatch && !customerEmail) customerEmail = emailMatch[0];
+      const phoneMatch = text.match(/\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/);
+      if (phoneMatch && !customerPhone) customerPhone = phoneMatch[0].replace(/\D/g,'');
+    }
+
+    async function sendMessage(overrideText) {
       if (busy) return;
-      const text = inputEl.value.trim(); if (!text) return;
+      const text = (overrideText !== undefined ? overrideText : inputEl.value).trim();
+      if (!text) return;
       inputEl.value = ''; inputEl.style.height = 'auto';
       busy = true; sendBtn.disabled = true;
-      addBubble('user', text); history.push({ role: 'user', content: text }); showTyping();
+
+      extractIdentity(text);
+      addBubble('user', text);
+      history.push({ role: 'user', content: text });
+      showTyping();
+
       try {
-        const resp = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: history, imageBase64: null, imageMediaType: null }) });
+        const resp = await fetch(API, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages: history, imageBase64: null, imageMediaType: null, customerName, customerEmail, customerPhone })
+        });
         removeTyping();
-        if (!resp.ok) { addBubble('bot', 'Sorry, something went wrong (' + resp.status + '). Please try again.'); }
-        else {
+
+        if (!resp.ok) {
+          addBubble('bot', 'Sorry, something went wrong (' + resp.status + '). Please try again.');
+        } else {
           const data = await resp.json();
-          const reply = (data && (data.reply || data.message || data.content || data.text)) || 'No response received.';
-          addBubble('bot', reply); history.push({ role: 'assistant', content: reply });
+          const reply = (data.reply || data.message || data.content || data.text) || 'No response received.';
+          addBubble('bot', reply);
+          history.push({ role: 'assistant', content: reply });
+
+          if (data.paymentLink && data.invoiceNumber) {
+            addPaymentButton(data.paymentLink, data.invoiceNumber, data.total);
+          }
+          if (data.verificationRequired) {
+            addBubble('bot', 'Please enter the 6-digit code we just texted to your phone to confirm your order.');
+          }
         }
-      } catch (err) { removeTyping(); addBubble('bot', 'Connection error — please check your network and try again.'); }
+      } catch (err) {
+        removeTyping();
+        addBubble('bot', 'Connection error — please check your network and try again.');
+      }
+
       busy = false; sendBtn.disabled = false; inputEl.focus();
     }
+
     inputEl.addEventListener('input', function() { this.style.height = 'auto'; this.style.height = Math.min(this.scrollHeight, 120) + 'px'; });
     inputEl.addEventListener('keydown', function(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
-    sendBtn.addEventListener('click', sendMessage);
+    sendBtn.addEventListener('click', function() { sendMessage(); });
     window.addEventListener('message', function(e) { if (!e.data || e.data.type !== 'rcp-prompt') return; if (e.data.text) { inputEl.value = e.data.text; inputEl.dispatchEvent(new Event('input')); sendMessage(); } });
-    // Auto-fill from ?prompt= URL param
-    (function() {
-      var p = new URLSearchParams(window.location.search).get('prompt');
-      if (p) { inputEl.value = p; inputEl.dispatchEvent(new Event('input')); setTimeout(sendMessage, 400); }
-    })();
+    (function() { var p = new URLSearchParams(window.location.search).get('prompt'); if (p) { inputEl.value = p; inputEl.dispatchEvent(new Event('input')); setTimeout(sendMessage, 400); } })();
     inputEl.focus();
   <\/script>
 </body>
@@ -3386,50 +3431,51 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
     const sendBtn    = document.getElementById('send-btn');
     let history = [];
     let busy = false;
+    let customerName = '', customerEmail = '', customerPhone = '';
 
-    function scrollBottom() {
-      messagesEl.scrollTop = messagesEl.scrollHeight;
-    }
+    function scrollBottom() { messagesEl.scrollTop = messagesEl.scrollHeight; }
 
     function addBubble(role, text) {
-      const wrap = document.createElement('div');
-      wrap.className = 'msg ' + role;
-      const bubble = document.createElement('div');
-      bubble.className = 'bubble';
-      bubble.textContent = text;
-      wrap.appendChild(bubble);
-      messagesEl.appendChild(wrap);
-      scrollBottom();
-      return bubble;
+      const wrap = document.createElement('div'); wrap.className = 'msg ' + role;
+      const bubble = document.createElement('div'); bubble.className = 'bubble'; bubble.textContent = text;
+      wrap.appendChild(bubble); messagesEl.appendChild(wrap); scrollBottom(); return bubble;
+    }
+
+    function addPaymentButton(paymentLink, invoiceNumber, total) {
+      const wrap = document.createElement('div'); wrap.className = 'msg bot';
+      const bubble = document.createElement('div'); bubble.className = 'bubble';
+      bubble.innerHTML =
+        '<div style="margin-bottom:8px;font-weight:600;">Invoice #' + invoiceNumber + ' is ready!</div>' +
+        '<div style="margin-bottom:12px;font-size:13px;opacity:0.85;">Total: $' + Number(total).toFixed(2) + '</div>' +
+        '<a href="' + paymentLink + '" target="_blank" rel="noopener" ' +
+        'style="display:inline-block;background:#C8D400;color:#16161d;font-weight:700;padding:10px 20px;border-radius:20px;text-decoration:none;font-size:14px;">Pay Invoice →</a>';
+      wrap.appendChild(bubble); messagesEl.appendChild(wrap); scrollBottom();
     }
 
     function showTyping() {
-      const wrap = document.createElement('div');
-      wrap.className = 'msg bot';
-      wrap.id = 'typing-indicator';
-      const bubble = document.createElement('div');
-      bubble.className = 'bubble';
+      const wrap = document.createElement('div'); wrap.className = 'msg bot'; wrap.id = 'typing-indicator';
+      const bubble = document.createElement('div'); bubble.className = 'bubble';
       bubble.innerHTML = '<span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span>';
-      wrap.appendChild(bubble);
-      messagesEl.appendChild(wrap);
-      scrollBottom();
+      wrap.appendChild(bubble); messagesEl.appendChild(wrap); scrollBottom();
     }
 
-    function removeTyping() {
-      const el = document.getElementById('typing-indicator');
-      if (el) el.remove();
+    function removeTyping() { const el = document.getElementById('typing-indicator'); if (el) el.remove(); }
+
+    function extractIdentity(text) {
+      const emailMatch = text.match(/[\w.+-]+@[\w-]+\.[a-z]{2,}/i);
+      if (emailMatch && !customerEmail) customerEmail = emailMatch[0];
+      const phoneMatch = text.match(/\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/);
+      if (phoneMatch && !customerPhone) customerPhone = phoneMatch[0].replace(/\D/g,'');
     }
 
-    async function sendMessage() {
+    async function sendMessage(overrideText) {
       if (busy) return;
-      const text = inputEl.value.trim();
+      const text = (overrideText !== undefined ? overrideText : inputEl.value).trim();
       if (!text) return;
+      inputEl.value = ''; inputEl.style.height = 'auto';
+      busy = true; sendBtn.disabled = true;
 
-      inputEl.value = '';
-      inputEl.style.height = 'auto';
-      busy = true;
-      sendBtn.disabled = true;
-
+      extractIdentity(text);
       addBubble('user', text);
       history.push({ role: 'user', content: text });
       showTyping();
@@ -3438,58 +3484,38 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
         const resp = await fetch(API, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messages: history, imageBase64: null, imageMediaType: null })
+          body: JSON.stringify({ messages: history, imageBase64: null, imageMediaType: null, customerName, customerEmail, customerPhone })
         });
-
         removeTyping();
 
         if (!resp.ok) {
           addBubble('bot', 'Sorry, something went wrong (' + resp.status + '). Please try again.');
         } else {
           const data = await resp.json();
-          const reply = (data && (data.reply || data.message || data.content || data.text)) || 'No response received.';
+          const reply = (data.reply || data.message || data.content || data.text) || 'No response received.';
           addBubble('bot', reply);
           history.push({ role: 'assistant', content: reply });
+
+          if (data.paymentLink && data.invoiceNumber) {
+            addPaymentButton(data.paymentLink, data.invoiceNumber, data.total);
+          }
+          if (data.verificationRequired) {
+            addBubble('bot', 'Please enter the 6-digit code we just texted to your phone to confirm your order.');
+          }
         }
       } catch (err) {
         removeTyping();
         addBubble('bot', 'Connection error — please check your network and try again.');
       }
 
-      busy = false;
-      sendBtn.disabled = false;
-      inputEl.focus();
+      busy = false; sendBtn.disabled = false; inputEl.focus();
     }
 
-    inputEl.addEventListener('input', function() {
-      this.style.height = 'auto';
-      this.style.height = Math.min(this.scrollHeight, 120) + 'px';
-    });
-
-    inputEl.addEventListener('keydown', function(e) {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        sendMessage();
-      }
-    });
-
-    sendBtn.addEventListener('click', sendMessage);
-
-    window.addEventListener('message', function(e) {
-      if (!e.data || e.data.type !== 'rcp-prompt') return;
-      if (e.data.text) {
-        inputEl.value = e.data.text;
-        inputEl.dispatchEvent(new Event('input'));
-        sendMessage();
-      }
-    });
-
-    // Auto-fill from ?prompt= URL param
-    (function() {
-      var p = new URLSearchParams(window.location.search).get('prompt');
-      if (p) { inputEl.value = p; inputEl.dispatchEvent(new Event('input')); setTimeout(sendMessage, 400); }
-    })();
-
+    inputEl.addEventListener('input', function() { this.style.height = 'auto'; this.style.height = Math.min(this.scrollHeight, 120) + 'px'; });
+    inputEl.addEventListener('keydown', function(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
+    sendBtn.addEventListener('click', function() { sendMessage(); });
+    window.addEventListener('message', function(e) { if (!e.data || e.data.type !== 'rcp-prompt') return; if (e.data.text) { inputEl.value = e.data.text; inputEl.dispatchEvent(new Event('input')); sendMessage(); } });
+    (function() { var p = new URLSearchParams(window.location.search).get('prompt'); if (p) { inputEl.value = p; inputEl.dispatchEvent(new Event('input')); setTimeout(sendMessage, 400); } })();
     inputEl.focus();
   <\/script>
 </body>
