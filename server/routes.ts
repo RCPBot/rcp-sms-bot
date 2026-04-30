@@ -319,8 +319,10 @@ export function registerRoutes(httpServer: Server, app: Express) {
         received: po.POStatus === 'Closed',
         totalAmt: po.TotalAmt,
         memo: po.Memo,
-        lines: (po.Line || []).filter((l: any) => l.DetailType === 'ItemBasedExpenseLineDetail').map((l: any) => ({
-          item: l.ItemBasedExpenseLineDetail?.ItemRef?.name,
+        lines: (po.Line || []).map((l: any) => ({
+          type: l.DetailType,
+          description: l.Description,
+          item: l.ItemBasedExpenseLineDetail?.ItemRef?.name || l.AccountBasedExpenseLineDetail?.AccountRef?.name,
           qty: l.ItemBasedExpenseLineDetail?.Qty,
           unitPrice: l.ItemBasedExpenseLineDetail?.UnitPrice,
           amount: l.Amount,

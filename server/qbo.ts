@@ -149,7 +149,16 @@ export async function getPurchaseOrders(opts: {
       (po.VendorRef?.name || '').toLowerCase().includes(needle)
     );
   }
-  return pos;
+  // Fetch full detail for each PO so we get line descriptions (which contain INV references)
+  const detailed = await Promise.all(pos.map(async (po: any) => {
+    try {
+      const detail = await qboGet(`/purchaseorder/${po.Id}`);
+      return detail.PurchaseOrder || po;
+    } catch {
+      return po;
+    }
+  }));
+  return detailed;
 }
 
 // Fetch shareable invoice/estimate link via include=invoiceLink (works without QBO Payments)
