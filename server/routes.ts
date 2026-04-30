@@ -304,7 +304,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
   app.get('/api/qbo/purchase-orders', async (req, res) => {
     try {
       if (!isQboConfigured()) return res.status(503).json({ error: 'QBO not configured' });
-      const vendor = (req.query.vendor as string) || 'cowtown';
+      const vendor = (req.query.vendor as string) || '';
       const days = parseInt((req.query.days as string) || '25', 10);
       const since = new Date();
       since.setDate(since.getDate() - days);
