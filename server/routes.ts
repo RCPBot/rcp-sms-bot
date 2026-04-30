@@ -3500,6 +3500,123 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
     res.send(html);
   });
 
+  // ── /api/admin/po-audit — monthly PO audit email ────────────────────────────
+  app.post("/api/admin/po-audit", async (_req, res) => {
+    try {
+      if (!isQboConfigured()) return res.status(503).json({ sent: false, error: 'QBO not configured' });
+
+      const DAYS = 60;
+      const since = new Date();
+      since.setDate(since.getDate() - DAYS);
+      const sinceDate = since.toISOString().split('T')[0];
+
+      // Fetch all POs
+      const allPos = await getPurchaseOrders({ sinceDate });
+
+      // Fetch all invoices with concrete
+      const sql = `SELECT * FROM Invoice WHERE TxnDate >= '${sinceDate}' MAXRESULTS 500`;
+      const invData = await qboGet(`/query?query=${encodeURIComponent(sql)}`);
+      const invoices: any[] = invData.QueryResponse?.Invoice || [];
+
+      // ── SECTION 1: Unreceived POs (all vendors) ──
+      const openPos = allPos.filter((po: any) => po.POStatus !== 'Closed');
+
+      // ── SECTION 2: Concrete invoices with no PO ──
+      const REAL_CONCRETE = ['3000 psi','3500 psi','4000 psi','4500 psi','3,000','3,500','4,000','4,500','5 sack','5.5 sack','6 sack','6.5 sack','4.5 sack'];
+      const EXCLUDE = ['delivery','truck time','short load','fee','poly','tape','ada','tile','dobie','chair','epoxy','expansion','fiber','foam','curing'];
+      const isRealConcrete = (name: string) => {
+        const n = (name||'').toLowerCase();
+        if (EXCLUDE.some(e => n.includes(e))) return false;
+        return REAL_CONCRETE.some(k => n.includes(k.toLowerCase()));
+      };
+
+      // Build PO→INV map from line descriptions
+      const poInvMap: Record<string, string[]> = {};
+      for (const po of allPos) {
+        const refs: string[] = [];
+        for (const line of (po.Line || [])) {
+          const desc = (line.Description || '').toUpperCase();
+          const matches = desc.match(/INV\s*#?\s*(\d{4,6})/g) || [];
+          refs.push(...matches.map((m: string) => m.replace(/INV\s*#?\s*/i,'').trim()));
+        }
+        poInvMap[po.DocNumber] = refs;
+      }
+      const coveredInvNums = new Set(Object.values(poInvMap).flat());
+
+      const concreteNoPos: any[] = [];
+      for (const inv of invoices) {
+        const hasRealConcrete = (inv.Line||[]).some((l: any) => {
+          const name = l.SalesItemLineDetail?.ItemRef?.name || '';
+          const up = l.SalesItemLineDetail?.UnitPrice || 0;
+          return isRealConcrete(name) && up >= 100;
+        });
+        if (hasRealConcrete && !coveredInvNums.has(inv.DocNumber)) {
+          const yards = (inv.Line||[]).reduce((sum: number, l: any) => {
+            const name = l.SalesItemLineDetail?.ItemRef?.name || '';
+            const up = l.SalesItemLineDetail?.UnitPrice || 0;
+            return isRealConcrete(name) && up >= 100 ? sum + (l.SalesItemLineDetail?.Qty||0) : sum;
+          }, 0);
+          concreteNoPos.push({ num: inv.DocNumber, date: inv.TxnDate, customer: inv.CustomerRef?.name, yards, total: inv.TotalAmt });
+        }
+      }
+
+      // ── Build HTML email ──
+      const reportDate = new Date().toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' });
+      const periodStr = `${since.toLocaleDateString('en-US',{month:'short',day:'numeric'})} – ${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}`;
+
+      let openPoRows = openPos.length === 0
+        ? '<tr><td colspan="4" style="padding:8px;color:#666;font-style:italic;">No open POs — all received.</td></tr>'
+        : openPos.map((po: any) => `<tr><td style="padding:6px 10px;border-bottom:1px solid #eee;">PO #${po.DocNumber}</td><td style="padding:6px 10px;border-bottom:1px solid #eee;">${po.TxnDate}</td><td style="padding:6px 10px;border-bottom:1px solid #eee;">${po.VendorRef?.name||'Unknown'}</td><td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right;">$${Number(po.TotalAmt).toLocaleString('en-US',{minimumFractionDigits:2})}</td></tr>`).join('');
+
+      let concreteRows = concreteNoPos.length === 0
+        ? '<tr><td colspan="5" style="padding:8px;color:#666;font-style:italic;">All concrete invoices have a matching Cowtown PO.</td></tr>'
+        : concreteNoPos.map(i => `<tr><td style="padding:6px 10px;border-bottom:1px solid #eee;">Inv #${i.num}</td><td style="padding:6px 10px;border-bottom:1px solid #eee;">${i.date}</td><td style="padding:6px 10px;border-bottom:1px solid #eee;">${i.customer}</td><td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right;">${i.yards} yd</td><td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right;">$${Number(i.total).toLocaleString('en-US',{minimumFractionDigits:2})}</td></tr>`).join('');
+
+      const html = `
+<div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto;color:#1a1a1a;">
+  <div style="background:#1a1a1a;padding:24px 28px;border-radius:8px 8px 0 0;">
+    <img src="https://cdn.shopify.com/s/files/1/0747/6446/9913/files/logoheader.jpg" style="height:48px;" />
+    <p style="color:#C8D400;margin:8px 0 0;font-size:13px;">Monthly PO Audit Report — ${reportDate}</p>
+  </div>
+  <div style="padding:24px 28px;background:#f9f9f9;">
+    <p style="margin:0 0 6px;">Period reviewed: <strong>${periodStr}</strong></p>
+    <p style="margin:0 0 20px;color:#555;font-size:13px;">This report checks for (1) purchase orders that have not been received, and (2) concrete invoices with no matching Cowtown PO on file.</p>
+
+    <h2 style="font-size:15px;border-bottom:2px solid #C8D400;padding-bottom:6px;margin-bottom:12px;">Open / Unreceived Purchase Orders (${openPos.length})</h2>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <thead><tr style="background:#2e2e2e;color:#fff;"><th style="padding:8px 10px;text-align:left;">PO #</th><th style="padding:8px 10px;text-align:left;">Date</th><th style="padding:8px 10px;text-align:left;">Vendor</th><th style="padding:8px 10px;text-align:right;">Amount</th></tr></thead>
+      <tbody>${openPoRows}</tbody>
+    </table>
+
+    <h2 style="font-size:15px;border-bottom:2px solid #C8D400;padding-bottom:6px;margin:24px 0 12px;">Concrete Invoices With No Cowtown PO (${concreteNoPos.length})</h2>
+    <p style="font-size:12px;color:#777;margin:-8px 0 10px;">Covers 3,000 psi – 4,500 psi concrete sold at ≥$100/yd</p>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <thead><tr style="background:#2e2e2e;color:#fff;"><th style="padding:8px 10px;text-align:left;">Invoice #</th><th style="padding:8px 10px;text-align:left;">Date</th><th style="padding:8px 10px;text-align:left;">Customer</th><th style="padding:8px 10px;text-align:right;">Yards</th><th style="padding:8px 10px;text-align:right;">Total</th></tr></thead>
+      <tbody>${concreteRows}</tbody>
+    </table>
+
+    <p style="margin-top:28px;font-size:12px;color:#999;">Generated automatically by RCP AI Platform on ${reportDate}. Log into QuickBooks to review and resolve any items.</p>
+  </div>
+</div>`;
+
+      const { default: nodemailer } = await import('nodemailer');
+      const transporter = nodemailer.createTransport({ service: 'gmail', auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD || process.env.EMAIL_PASS } });
+      const recipients = ['brian@rebarconcreteproducts.com', 'office@rebarconcreteproducts.com'];
+      await transporter.sendMail({
+        from: `"Rebar Concrete Products" <${process.env.GMAIL_USER}>`,
+        to: recipients.join(', '),
+        subject: `RCP Monthly PO Audit — ${reportDate}`,
+        html,
+      });
+
+      console.log(`[PO Audit] Report sent to ${recipients.join(', ')}`);
+      res.json({ sent: true, openPos: openPos.length, concreteNoPos: concreteNoPos.length, recipients });
+    } catch (err: any) {
+      console.error('[PO Audit] Error:', err);
+      res.status(500).json({ sent: false, error: err.message });
+    }
+  });
+
   // ── /api/admin/digest — trigger daily digest manually or via cron ──────────
   app.post("/api/admin/digest", async (_req, res) => {
     try {
