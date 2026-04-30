@@ -364,7 +364,9 @@ CONCRETE: must know PSI and sack count. Options: 3000 psi 4.5 sack=$155, 3000 ps
 - CONCRETE FEES (automatically added to invoice — always quote these accurately):
   - RULE: fee = ceil(yards / 10) × $70. NO exceptions, NO upper limit, NO "large order" exemption. EVERY concrete order gets a delivery fee.
   - Exception: 5 yards or less → replace with a flat $350 Short Load Fee instead (no truck delivery fee).
-  - Formula examples: 1–5 yds = $350 Short Load. 6–10 yds = 1×$70=$70. 11–20 yds = 2×$70=$140. 21–30 yds = 3×$70=$210. 31–40 yds = 4×$70=$280. 55 yds = ceil(55/10)=6×$70=$420. 100 yds = 10×$70=$700. 500 yds = 50×$70=$3,500.
+  - Formula examples: 1–5 yds = $350 Short Load. 6–10 yds = 1×$70=$70. 11–20 yds = 2×$70=$140. 21–30 yds = 3×$70=$210. 31–40 yds = 4×$70=$280. 41–50 yds = 5×$70=$350. 51–60 yds = 6×$70=$420. 61–70 yds = 7×$70=$490. 100 yds = 10×$70=$700.
+  - CRITICAL: 60 yards = ceil(60÷10) = 6 trucks = $420. NOT 7. Use exact ceil division.
+  - This fee is the ONLY delivery charge for concrete. NEVER add a separate per-mile delivery fee on top of this.
   - NEVER say "no delivery fee" for any concrete order over 5 yards. Large orders still pay the fee.
   - Concrete is ALWAYS delivered — there is no pickup option for concrete.
   - Always include the delivery fee in the quoted total so the customer sees the full cost.
