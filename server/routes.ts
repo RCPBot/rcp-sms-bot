@@ -2918,6 +2918,19 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       wrap.appendChild(bubble); messagesEl.appendChild(wrap); scrollBottom();
     }
 
+    function addEstimateConfirmation(estimateNumber, total, estimateLink, email) {
+      const wrap = document.createElement('div'); wrap.className = 'msg bot';
+      const bubble = document.createElement('div'); bubble.className = 'bubble';
+      const emailNote = email ? '<div style="margin-top:8px;font-size:13px;opacity:0.85;">A copy has been emailed to ' + email + '.</div>' : '<div style="margin-top:8px;font-size:13px;opacity:0.85;">Check your email for a copy of the estimate.</div>';
+      const linkHtml = estimateLink ? '<div style="margin-top:10px;"><a href="' + estimateLink + '" target="_blank" rel="noopener" style="display:inline-block;background:#C8D400;color:#16161d;font-weight:700;padding:10px 20px;border-radius:20px;text-decoration:none;font-size:14px;">View Estimate →</a></div>' : '';
+      bubble.innerHTML =
+        '<div style="margin-bottom:8px;font-weight:600;">Estimate #' + estimateNumber + ' is ready!</div>' +
+        '<div style="font-size:13px;opacity:0.85;">Total: $' + Number(total).toFixed(2) + ' (includes 8.25% tax)</div>' +
+        emailNote + linkHtml +
+        '<div style="margin-top:10px;font-size:13px;opacity:0.75;">Ready to place the order? Just let me know and I\'ll convert it to an invoice.</div>';
+      wrap.appendChild(bubble); messagesEl.appendChild(wrap); scrollBottom();
+    }
+
     function showTyping() {
       const wrap = document.createElement('div'); wrap.className = 'msg bot'; wrap.id = 'typing-indicator';
       const bubble = document.createElement('div'); bubble.className = 'bubble';
@@ -2964,6 +2977,10 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
 
           if (data.paymentLink && data.invoiceNumber) {
             addPaymentButton(data.paymentLink, data.invoiceNumber, data.total);
+          }
+
+          if (data.confirmEstimateTriggered && data.estimateNumber) {
+            addEstimateConfirmation(data.estimateNumber, data.total, data.estimateLink, customerEmail);
           }
           if (data.verificationRequired) {
             addBubble('bot', 'Please enter the 6-digit code we just texted to your phone to confirm your order.');
@@ -3452,6 +3469,19 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       wrap.appendChild(bubble); messagesEl.appendChild(wrap); scrollBottom();
     }
 
+    function addEstimateConfirmation(estimateNumber, total, estimateLink, email) {
+      const wrap = document.createElement('div'); wrap.className = 'msg bot';
+      const bubble = document.createElement('div'); bubble.className = 'bubble';
+      const emailNote = email ? '<div style="margin-top:8px;font-size:13px;opacity:0.85;">A copy has been emailed to ' + email + '.</div>' : '<div style="margin-top:8px;font-size:13px;opacity:0.85;">Check your email for a copy of the estimate.</div>';
+      const linkHtml = estimateLink ? '<div style="margin-top:10px;"><a href="' + estimateLink + '" target="_blank" rel="noopener" style="display:inline-block;background:#C8D400;color:#16161d;font-weight:700;padding:10px 20px;border-radius:20px;text-decoration:none;font-size:14px;">View Estimate →</a></div>' : '';
+      bubble.innerHTML =
+        '<div style="margin-bottom:8px;font-weight:600;">Estimate #' + estimateNumber + ' is ready!</div>' +
+        '<div style="font-size:13px;opacity:0.85;">Total: $' + Number(total).toFixed(2) + ' (includes 8.25% tax)</div>' +
+        emailNote + linkHtml +
+        '<div style="margin-top:10px;font-size:13px;opacity:0.75;">Ready to place the order? Just let me know and I\'ll convert it to an invoice.</div>';
+      wrap.appendChild(bubble); messagesEl.appendChild(wrap); scrollBottom();
+    }
+
     function showTyping() {
       const wrap = document.createElement('div'); wrap.className = 'msg bot'; wrap.id = 'typing-indicator';
       const bubble = document.createElement('div'); bubble.className = 'bubble';
@@ -3498,6 +3528,10 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
 
           if (data.paymentLink && data.invoiceNumber) {
             addPaymentButton(data.paymentLink, data.invoiceNumber, data.total);
+          }
+
+          if (data.confirmEstimateTriggered && data.estimateNumber) {
+            addEstimateConfirmation(data.estimateNumber, data.total, data.estimateLink, customerEmail);
           }
           if (data.verificationRequired) {
             addBubble('bot', 'Please enter the 6-digit code we just texted to your phone to confirm your order.');
