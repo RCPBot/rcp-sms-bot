@@ -3413,7 +3413,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       // ── Log web chat to DB for digest ──
       try {
         const msgs: { role: string; content: string }[] = req.body?.messages || [];
-        if (msgs.length >= 2) {
+        if (true) { // log every message from first interaction
           const lastReply = data.reply || data.message || data.content || data.text || "";
           const existingPhone = req.body?.customerPhone ? "web-" + req.body.customerPhone.replace(/\D/g,"") : null;
           const existingEmail = req.body?.customerEmail ? "web-" + req.body.customerEmail.replace(/[^a-z0-9]/gi,"").slice(0,20) : null;
