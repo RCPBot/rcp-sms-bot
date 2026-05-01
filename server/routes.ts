@@ -3368,18 +3368,40 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       try {
         const msgs: { role: string; content: string }[] = req.body?.messages || [];
         if (msgs.length >= 2) {
-          const lastUser = [...msgs].reverse().find(m => m.role === "user");
           const lastReply = data.reply || data.message || data.content || data.text || "";
-          const webPhone = "web-" + (req.body?.customerPhone || req.body?.customerEmail || "anonymous").replace(/[^a-z0-9]/gi, "").slice(0, 20) + "-" + Date.now().toString(36).slice(-4);
           const existingPhone = req.body?.customerPhone ? "web-" + req.body.customerPhone.replace(/\D/g,"") : null;
-          const phone = existingPhone || webPhone;
+          const existingEmail = req.body?.customerEmail ? "web-" + req.body.customerEmail.replace(/[^a-z0-9]/gi,"").slice(0,20) : null;
+          const phone = existingPhone || existingEmail || ("web-anon-" + Date.now().toString(36).slice(-6));
           const conv = await storage.getOrCreateConversation(phone);
-          if (lastUser) {
-            await storage.addMessage({ conversationId: conv.id, direction: "inbound", body: lastUser.content, createdAt: new Date() });
+
+          // Sync all history messages that aren't yet saved
+          // We save all msgs[] turns + the current bot reply.
+          // To avoid duplicates on every request, we check how many are already stored.
+          const existingMsgs = await storage.getMessages(conv.id);
+          const alreadySaved = existingMsgs.length;
+
+          // msgs[] contains all prior turns (not including the current bot reply)
+          // Each pair: user message + (optional) prior assistant message
+          // We want to backfill any turns not yet saved, then append the new bot reply.
+          // Strategy: msgs has N entries. We've already saved `alreadySaved` entries.
+          // Save msgs[alreadySaved..] then the new bot reply.
+          const msgsToSave = msgs.slice(alreadySaved);
+          for (const m of msgsToSave) {
+            if (!m.content?.trim()) continue;
+            const direction = m.role === "user" ? "inbound" : "outbound";
+            await storage.addMessage({ conversationId: conv.id, direction, body: m.content, createdAt: new Date() });
           }
+
+          // Always append the latest bot reply as outbound
           if (lastReply) {
             await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: lastReply, createdAt: new Date() });
           }
+
+          // Update conversation name/email if we now know them
+          const updates: Record<string, any> = {};
+          if (req.body?.customerName && !conv.customerName) updates.customerName = req.body.customerName;
+          if (req.body?.customerEmail && !conv.customerEmail) updates.customerEmail = req.body.customerEmail;
+          if (Object.keys(updates).length > 0) await storage.updateConversation(conv.id, updates);
         }
       } catch (logErr) {
         console.warn("[chat-proxy] Failed to log web chat:", logErr);
