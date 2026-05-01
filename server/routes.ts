@@ -3350,6 +3350,27 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
         }
       }
 
+      // ── Log web chat to DB for digest ──
+      try {
+        const msgs: { role: string; content: string }[] = req.body?.messages || [];
+        if (msgs.length >= 2) {
+          const lastUser = [...msgs].reverse().find(m => m.role === "user");
+          const lastReply = data.reply || data.message || data.content || data.text || "";
+          const webPhone = "web-" + (req.body?.customerPhone || req.body?.customerEmail || "anonymous").replace(/[^a-z0-9]/gi, "").slice(0, 20) + "-" + Date.now().toString(36).slice(-4);
+          const existingPhone = req.body?.customerPhone ? "web-" + req.body.customerPhone.replace(/\D/g,"") : null;
+          const phone = existingPhone || webPhone;
+          const conv = await storage.getOrCreateConversation(phone);
+          if (lastUser) {
+            await storage.addMessage({ conversationId: conv.id, direction: "inbound", body: lastUser.content, createdAt: new Date() });
+          }
+          if (lastReply) {
+            await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: lastReply, createdAt: new Date() });
+          }
+        }
+      } catch (logErr) {
+        console.warn("[chat-proxy] Failed to log web chat:", logErr);
+      }
+
       res.json(data);
     } catch (err: any) {
       res.status(502).json({ error: "Chat proxy error: " + err.message });
