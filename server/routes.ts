@@ -3283,6 +3283,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
           if (estData.estimateNumber) {
             data.confirmEstimateTriggered = true;
             data.estimateNumber = estData.estimateNumber;
+            data.estimateId = estData.estimateId;
             data.estimateLink = estData.estimateLink;
             data.total = estData.total;
             // Send SMS confirmation if phone available
@@ -3359,6 +3360,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
                   if (estData.estimateNumber) {
                     data.confirmEstimateTriggered = true;
                     data.estimateNumber = estData.estimateNumber;
+                    data.estimateId = estData.estimateId;
                     data.estimateLink = estData.estimateLink;
                     data.total = estData.total;
                     console.log(`[chat-proxy] Retry estimate created: #${estData.estimateNumber}`);
