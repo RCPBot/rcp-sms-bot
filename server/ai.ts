@@ -543,7 +543,7 @@ Direct requests:
 
 FORMAT: Tag MUST be first. Example:
 "[CONFIRM_ORDER]On it — your invoice will be ready in just a moment."
-"[CONFIRM_ESTIMATE]On it — your estimate will be emailed to you shortly."
+"[CONFIRM_ESTIMATE]On it — your estimate will be emailed to you shortly. If you don't see it in a few minutes, check your spam folder."
 
 TAX RULE (CRITICAL):
 - McKinney, TX sales tax is 8.25%. ALWAYS apply this to every quote and order summary.
