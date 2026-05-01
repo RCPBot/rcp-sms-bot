@@ -3156,7 +3156,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
           // ────────────────────────────────────────────────────────────────────────────
 
           // POST to our own /api/web-order to create QBO invoice (await so we can inject error into reply)
-          const origin = `${req.protocol}://${req.get('host')}`;
+          const origin = `https://rcp-sms-bot-production.up.railway.app`;
           const orderResp = await fetch(`${origin}/api/web-order`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -3226,7 +3226,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
             customerPhone: extractedOrderJson.customerPhone || req.body?.customerPhone || "",
             customerEmail: extractedOrderJson.customerEmail || req.body?.customerEmail || "",
           };
-          const origin = `${req.protocol}://${req.get('host')}`;
+          const origin = `https://rcp-sms-bot-production.up.railway.app`;
           const estResp = await fetch(`${origin}/api/web-estimate`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -3303,7 +3303,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
                     customerPhone: retryJson.customerPhone || req.body?.customerPhone || "",
                     customerEmail: retryJson.customerEmail || req.body?.customerEmail || "",
                   };
-                  const origin = `${req.protocol}://${req.get('host')}`;
+                  const origin = `https://rcp-sms-bot-production.up.railway.app`;
                   const estResp = await fetch(`${origin}/api/web-estimate`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
