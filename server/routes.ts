@@ -3133,6 +3133,26 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
           const cleanedPhone = rawPhone.replace(/\D/g, "");
           const e164 = cleanedPhone.startsWith("1") ? "+" + cleanedPhone : "+1" + cleanedPhone;
 
+          // ── EXISTING CUSTOMER GATE ───────────────────────────────────────────────
+          // Web invoices are for existing customers only — check BEFORE sending a
+          // verification code so unknown contacts get a clear, friendly redirect.
+          const existingCustomerId = await findExistingCustomer({
+            name: orderPayload.customerName,
+            phone: orderPayload.customerPhone,
+            email: orderPayload.customerEmail || undefined,
+          });
+          if (!existingCustomerId) {
+            const notFoundMsg = `I wasn't able to find an existing account for ${orderPayload.customerName || "you"} in our system. Online invoicing is available to customers with an account on file.\n\nTo get set up, stop by our store at 2112 N Custer Rd, McKinney, TX or call us at 469-631-7730 — it only takes a few minutes! In the meantime, I can send you a formal estimate instead.`;
+            if (data.reply !== undefined)   data.reply   = notFoundMsg;
+            if (data.message !== undefined) data.message = notFoundMsg;
+            if (data.content !== undefined) data.content = notFoundMsg;
+            if (data.text !== undefined)    data.text    = notFoundMsg;
+            console.warn(`[chat-proxy] Invoice blocked — no existing account for: ${orderPayload.customerName} / ${orderPayload.customerPhone}`);
+            res.json(data);
+            return;
+          }
+          // ─────────────────────────────────────────────────────────────────────────
+
           // ── Verification gate for web chat ─────────────────────────────────────────
           // Check if this request includes a verified code from the widget
           const submittedCode: string = req.body?.verificationCode || "";
