@@ -1954,6 +1954,27 @@ export function registerRoutes(httpServer: Server, app: Express) {
     res.json(enriched);
   });
 
+  // Serve estimate PDF directly from QBO — no customer login required
+  app.get("/api/estimate-pdf/:qboEstimateId", async (req, res) => {
+    try {
+      const { qboEstimateId } = req.params;
+      if (!qboEstimateId || !/^\d+$/.test(qboEstimateId)) {
+        return res.status(400).send("Invalid estimate ID");
+      }
+      const pdfBuffer = await fetchEstimatePdf(qboEstimateId);
+      if (!pdfBuffer) {
+        return res.status(404).send("PDF not available");
+      }
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="Estimate-${qboEstimateId}.pdf"`);
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.send(pdfBuffer);
+    } catch (err: any) {
+      console.error("[estimate-pdf]", err);
+      res.status(500).send("Failed to fetch PDF");
+    }
+  });
+
   // Manually approve an estimate (admin action)
   app.post("/api/estimates/:id/approve", async (req, res) => {
     const id = parseInt(req.params.id);
