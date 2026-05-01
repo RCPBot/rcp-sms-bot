@@ -733,6 +733,27 @@ export async function getEstimateStatus(estimateId: string): Promise<string> {
   }
 }
 
+// ── Fetch estimate PDF as a Buffer (for email attachment) ──────────────────
+export async function fetchEstimatePdf(estimateId: string): Promise<Buffer | null> {
+  try {
+    const { realmId } = cfg();
+    const token = await getAccessToken();
+    const res = await fetch(
+      `${QB_BASE}/${realmId}/estimate/${estimateId}/pdf?minorversion=75`,
+      { headers: { Authorization: `Bearer ${token}`, Accept: "application/pdf" } }
+    );
+    if (!res.ok) {
+      console.warn(`[QBO] PDF fetch failed: ${res.status}`);
+      return null;
+    }
+    const arrayBuf = await res.arrayBuffer();
+    return Buffer.from(arrayBuf);
+  } catch (err) {
+    console.warn("[QBO] fetchEstimatePdf error:", err);
+    return null;
+  }
+}
+
 // ── Convert an approved estimate to an invoice ───────────────────────────────
 export async function convertEstimateToInvoice(qboEstimateId: string, customerEmail: string): Promise<{
   invoiceId: string;

@@ -4,7 +4,7 @@ import express from "express";
 import { storage } from "./storage";
 import { sendSms, isTwilioConfigured, sendPaymentLinkEmail, sendEstimateEmail, sendStaffOrderNotification, sendVerificationCode } from "./sms";
 import { processMessage, extractOrderFromConversation, extractCustomerInfo, isAiConfigured } from "./ai";
-import { syncProducts, findOrCreateCustomer, findExistingCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice, updateRailwayEnvVar, setLiveRefreshToken, getOrCreateBotCustomer, getOrCreateEstCustomer, getQboItems, getInvoiceById, getPurchaseOrders, qboGet } from "./qbo";
+import { syncProducts, findOrCreateCustomer, findExistingCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice, updateRailwayEnvVar, setLiveRefreshToken, getOrCreateBotCustomer, getOrCreateEstCustomer, getQboItems, getInvoiceById, getPurchaseOrders, qboGet, fetchEstimatePdf } from "./qbo";
 import { performTakeoff } from "./takeoff";
 import { resolveLinksFromText, extractUrls } from "./link-resolver";
 import { generateCutSheetPdf, emailCutSheet, emailCutSheetToCustomer, generatePlacementDrawingPdf, forwardPlansToOffice, generateBidPdf, emailBidPdf, OFFICE_EMAIL } from "./cutsheet";
@@ -2676,14 +2676,28 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
         ].filter(Boolean).join(" | "),
       });
 
-      // Email the estimate link to the customer
+      // Fetch estimate PDF from QBO and attach to email (avoids broken QBO login link)
+      let estimatePdf: Buffer | null = null;
+      try {
+        estimatePdf = await fetchEstimatePdf(est.estimateId);
+        if (estimatePdf) {
+          console.log(`[WEB-ESTIMATE] PDF fetched for estimate #${est.estimateNumber} (${estimatePdf.length} bytes)`);
+        } else {
+          console.warn(`[WEB-ESTIMATE] PDF not available for estimate #${est.estimateNumber}`);
+        }
+      } catch (pdfErr) {
+        console.warn("[WEB-ESTIMATE] PDF fetch error:", pdfErr);
+      }
+
+      // Email the estimate to the customer
       if (customerEmail) {
         sendEstimateEmail({
           to: customerEmail,
           customerName: customerName || "Customer",
           estimateNumber: est.estimateNumber,
           total,
-          estimateLink: est.estimateLink,
+          estimateLink: estimatePdf ? null : est.estimateLink,
+          pdfBuffer: estimatePdf,
         }).catch(e => console.warn("[WEB-ESTIMATE] Email error:", e));
       }
 

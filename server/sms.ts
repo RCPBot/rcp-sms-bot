@@ -89,15 +89,23 @@ export async function sendEstimateEmail(params: {
   estimateNumber: string;
   total: number;
   estimateLink: string | null;
+  pdfBuffer?: Buffer | null;
 }): Promise<void> {
   const transporter = getEmailTransporter();
   if (!transporter) {
     console.warn("[Email] No email transport configured — cannot send estimate email");
     return;
   }
-  const linkSection = params.estimateLink
-    ? `\nView your estimate here:\n${params.estimateLink}\n`
-    : "";
+
+  const attachments: any[] = [];
+  if (params.pdfBuffer) {
+    attachments.push({
+      filename: `Estimate-${params.estimateNumber}.pdf`,
+      content: params.pdfBuffer,
+      contentType: "application/pdf",
+    });
+  }
+
   await transporter.sendMail({
     from: `"Rebar Concrete Products" <${process.env.GMAIL_USER || process.env.EMAIL_USER || "noreply@rebarconcreteproducts.com"}>`,
     to: params.to,
@@ -106,7 +114,11 @@ export async function sendEstimateEmail(params: {
       `Hi ${params.customerName},`,
       ``,
       `Your estimate #${params.estimateNumber} has been prepared for $${params.total.toFixed(2)}.`,
-      linkSection,
+      ``,
+      params.pdfBuffer
+        ? `Your estimate is attached to this email as a PDF.`
+        : (params.estimateLink ? `View your estimate here:\n${params.estimateLink}` : ""),
+      ``,
       `This is a preliminary estimate for bidding purposes only. Prices are subject to change.`,
       ``,
       `Ready to place your order? Reply to this email or call us at (469) 631-7730.`,
@@ -119,14 +131,18 @@ export async function sendEstimateEmail(params: {
     html: `
       <p>Hi ${params.customerName},</p>
       <p>Your estimate <strong>#${params.estimateNumber}</strong> has been prepared for <strong>$${params.total.toFixed(2)}</strong>.</p>
-      ${params.estimateLink ? `<p><a href="${params.estimateLink}" style="background:#2563eb;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold;display:inline-block;">View Estimate</a></p><p style="color:#666;font-size:13px;">Or copy this link: ${params.estimateLink}</p>` : ""}
+      ${params.pdfBuffer
+        ? `<p>Your estimate is <strong>attached to this email</strong> as a PDF. Open the attachment to view all line items, pricing, and totals.</p>`
+        : (params.estimateLink ? `<p><a href="${params.estimateLink}" style="background:#2563eb;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold;display:inline-block;">View Estimate</a></p><p style="color:#666;font-size:13px;">Or copy this link: ${params.estimateLink}</p>` : "")
+      }
       <p style="color:#888;font-size:13px;">This is a preliminary estimate for bidding purposes only. Prices are subject to change.</p>
       <p>Ready to place your order? <a href="mailto:Office@RebarConcreteProducts.com">Reply to this email</a> or call us at (469) 631-7730.</p>
       <hr/>
       <p style="color:#888;font-size:12px;">Rebar Concrete Products &nbsp;|&nbsp; (469) 631-7730 &nbsp;|&nbsp; 2112 N Custer Rd, McKinney, TX 75071</p>
     `,
+    ...(attachments.length > 0 ? { attachments } : {}),
   });
-  console.log(`[Email] Estimate email sent to ${params.to} for estimate #${params.estimateNumber}`);
+  console.log(`[Email] Estimate email sent to ${params.to} for estimate #${params.estimateNumber}${params.pdfBuffer ? " (with PDF attachment)" : ""}`);
 }
 
 function splitMessage(text: string, maxLen: number): string[] {
