@@ -2708,7 +2708,10 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
         success: true,
         estimateNumber: est.estimateNumber,
         estimateId: est.estimateId,
-        estimateLink: est.estimateLink,
+        // Never return the QBO app link — it requires customer login.
+        // PDF is attached to the email instead. Widget should not show a link button.
+        estimateLink: null,
+        pdfAttached: !!estimatePdf,
         subtotal,
         tax,
         total,
