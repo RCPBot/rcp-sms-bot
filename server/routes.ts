@@ -3417,7 +3417,9 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
           const lastReply = data.reply || data.message || data.content || data.text || "";
           const existingPhone = req.body?.customerPhone ? "web-" + req.body.customerPhone.replace(/\D/g,"") : null;
           const existingEmail = req.body?.customerEmail ? "web-" + req.body.customerEmail.replace(/[^a-z0-9]/gi,"").slice(0,20) : null;
-          const phone = existingPhone || existingEmail || ("web-anon-" + Date.now().toString(36).slice(-6));
+          // Prefer sessionId (stable across page refreshes) so one visitor = one conversation record
+          const sessionId = req.body?.sessionId && typeof req.body.sessionId === "string" ? req.body.sessionId.slice(0, 60) : null;
+          const phone = existingPhone || existingEmail || sessionId || ("web-anon-" + Date.now().toString(36).slice(-6));
           const conv = await storage.getOrCreateConversation(phone);
 
           // Sync all history messages that aren't yet saved
