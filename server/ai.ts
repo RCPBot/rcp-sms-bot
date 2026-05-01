@@ -416,6 +416,13 @@ WIRE MESH: three different products — must clarify gauge and size:
 - 4x4 W4xW4 Wire Mesh (call for pricing)
 - "wire mesh" or "WWF" — Ask: "What size and gauge? We carry 5'x150' 10 gauge, W2.9xW2.9, and 4x4 W4xW4."
 
+WIRE MESH SHEET SIZE RULE (CRITICAL):
+- ALL wire mesh sheets are 8'×20' (160 sq ft per sheet). NEVER use 4'×4' or any other size.
+- To calculate sheets needed: sheets = ceil(total_sqft / 160)
+- Always add 10% waste: sheets = ceil(total_sqft × 1.10 / 160)
+- Example: 5,000 sq ft → ceil(5,000 × 1.10 / 160) = ceil(34.375) = 35 sheets
+- NEVER tell a customer wire mesh comes in 4'×4' sheets — that is wrong.
+
 BOLT CUTTER REPLACEMENT HEADS: separate from full bolt cutters:
 - 36" Replacement Head ($144), 42" Replacement Head ($230.25)
 - "replacement head" — Ask: "36" or 42"?"
