@@ -351,6 +351,14 @@ CORRECT EXAMPLE — 60×40 slab, #4 @ 18" OC (spacing_ft = 1.5):
   rows_B = ceil(60/1.5)+1 = 41 rows spanning 40ft → ceil(40/20)=2 sticks → 41×2 = 82 sticks
   Total = 166 sticks × 1.07 = 178 sticks
 
+CORRECT EXAMPLE — 80×100 slab, #3 @ 18" OC (spacing_ft = 1.5):
+  rows_A = ceil(100/1.5)+1 = 68 rows, each spanning 80ft → ceil(80/20)=4 sticks each → 68×4 = 272 sticks
+  rows_B = ceil(80/1.5)+1 = 54 rows, each spanning 100ft → ceil(100/20)=5 sticks each → 54×5 = 270 sticks
+  total_sticks = 272 + 270 = 542
+  final_qty = ceil(542 × 1.07) = 580 sticks
+  WRONG answer = 131 sticks (this is ONLY the row count — missing the sticks-per-row multiplier entirely)
+  RIGHT answer = 580 sticks
+
 Price = final_qty × unit_price_per_stick from QBO. Do NOT multiply by bundle size. Invoice qty = final_qty sticks.
 
 STRAIGHT REBAR: must know bar size (#3–#11). Length ALWAYS defaults to 20' — NEVER ask the customer for a length unless they explicitly mention 40' themselves. Quote immediately without any length clarification.
