@@ -378,6 +378,13 @@ CORRECT EXAMPLE — 80×100 slab, #3 @ 18" OC (lap = 1.25 ft):
   lap_extra=ceil(420×1.25/20)=ceil(26.25)=27 sticks
   total_with_laps=569 sticks × 1.07 = 609 sticks
 
+CORRECT EXAMPLE — 30×40 slab, #4 @ 12" OC (lap = 1.67 ft):
+  rows_A = ceil(30/1)+1=31 rows spanning 40ft → sticks=ceil(40/20)=2 → 31×2=62 sticks, joints=31×1=31
+  rows_B = ceil(40/1)+1=41 rows spanning 30ft → sticks=ceil(30/20)=2 → 41×2=82 sticks, joints=41×1=41
+  total_sticks=144, total_joints=72
+  lap_extra=ceil(72×1.67/20)=ceil(6.012)=7 sticks  ← CRITICAL: ceil(6.012)=7, NOT 6. Any decimal means round UP.
+  total_with_laps=151 sticks × 1.07 = ceil(161.57) = 162 sticks
+
 Price = final_qty × unit_price_per_stick from QBO. Do NOT multiply by bundle size. Invoice qty = final_qty sticks.
 Always show the lap calculation transparently in your response so the customer understands why they need extra bars.
 
