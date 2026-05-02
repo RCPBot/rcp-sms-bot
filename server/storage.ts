@@ -219,6 +219,7 @@ export interface IStorage {
   // Customer memory
   upsertCustomerMemory(phone: string, data: Partial<{name:string, email:string, company:string, deliveryAddress:string, typicalBarSizes:string, typicalProducts:string, lastOrderSummary:string, orderCount:number, totalSpent:number, avgOrderValue:number, largestOrderValue:number, mostOrderedProduct:string, customerType:string, notes:string}>): Promise<void>;
   getCustomerMemory(phone: string): Promise<any | null>;
+  getAllCustomerMemory(): Promise<any[]>;
   recordOrderCompletion(phone: string, orderTotal: number, orderSummary: string, lineItems: Array<{name: string, qty: number}>): Promise<void>;
 }
 
@@ -503,6 +504,30 @@ export class Storage implements IStorage {
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     };
+  }
+
+  async getAllCustomerMemory(): Promise<any[]> {
+    const result = await pool.query(
+      `SELECT * FROM customer_memory ORDER BY updated_at DESC`
+    );
+    return result.rows.map(r => ({
+      id: r.id,
+      phone: r.phone,
+      name: r.name,
+      email: r.email,
+      company: r.company,
+      deliveryAddress: r.delivery_address,
+      lastOrderSummary: r.last_order_summary,
+      orderCount: r.order_count,
+      totalSpent: r.total_spent,
+      avgOrderValue: r.avg_order_value,
+      largestOrderValue: r.largest_order_value,
+      mostOrderedProduct: r.most_ordered_product,
+      customerType: r.customer_type,
+      notes: r.notes,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
   }
 
   // Records a completed order and updates all order statistics atomically

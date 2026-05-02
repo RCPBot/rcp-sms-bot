@@ -750,6 +750,14 @@ export function registerRoutes(httpServer: Server, app: Express) {
         const closeMsg = `You're all set! Text us anytime if you need anything else. — Rebar Concrete Products (469) 631-7730`;
         await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: closeMsg });
         try { await sendSms(cleanPhone, closeMsg); } catch {}
+        // Check if conversation was abandoned mid-quote (closed without placing an order)
+        if (conv.stage !== 'invoiced') {
+          const allConvMsgs = await storage.getMessages(conv.id);
+          const lastBotMsg = [...allConvMsgs].reverse().find(m => m.direction === 'outbound');
+          if (lastBotMsg) {
+            checkAbandonedMidQuote(conv.id, cleanPhone, lastBotMsg.body).catch(() => {});
+          }
+        }
         return;
       }
 
@@ -970,6 +978,16 @@ export function registerRoutes(httpServer: Server, app: Express) {
         storage.upsertCustomerMemory(cleanPhone, knownData).catch(err =>
           console.warn('[SMS] Customer memory background upsert error:', err?.message)
         );
+        // Infer customer type for verified customers who don't have one yet
+        if (!customerMemoryRecord?.customerType || customerMemoryRecord.customerType === 'unknown') {
+          storage.getMessages(conv.id).then(allMsgs => {
+            return inferCustomerType(allMsgs);
+          }).then(customerType => {
+            if (customerType !== 'unknown') {
+              storage.upsertCustomerMemory(cleanPhone, { customerType }).catch(() => {});
+            }
+          }).catch(() => {});
+        }
       }
 
       // Handle the message with AI (pass image URLs if any)
@@ -1050,12 +1068,18 @@ export function registerRoutes(httpServer: Server, app: Express) {
           stage: "ordering",
         });
 
-        // Upsert customer memory with verified info
+        // Upsert customer memory with verified info + inferred customer type
         const memUpdateData: Record<string, any> = {};
         if (info.name || conv.customerName) memUpdateData.name = info.name || conv.customerName;
         if (info.email || conv.customerEmail) memUpdateData.email = info.email || conv.customerEmail;
         if (info.company || conv.customerCompany) memUpdateData.company = info.company || conv.customerCompany;
         if (info.deliveryAddress || conv.deliveryAddress) memUpdateData.deliveryAddress = info.deliveryAddress || conv.deliveryAddress;
+        // Infer customer type from conversation messages (fire-and-forget)
+        inferCustomerType(msgs).then(customerType => {
+          if (customerType !== 'unknown') {
+            storage.upsertCustomerMemory(cleanPhone, { customerType }).catch(() => {});
+          }
+        }).catch(() => {});
         if (Object.keys(memUpdateData).length > 0) {
           storage.upsertCustomerMemory(cleanPhone, memUpdateData).catch(err =>
             console.warn('[SMS] Customer memory upsert error:', err?.message)
@@ -3990,6 +4014,16 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       const id = parseInt(req.params.id, 10);
       await storage.deactivateLearnedRule(id);
       res.json({ ok: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── /api/admin/customer-memory — all customer profiles ───────────────────
+  app.get("/api/admin/customer-memory", async (_req, res) => {
+    try {
+      const customers = await storage.getAllCustomerMemory();
+      res.json(customers);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

@@ -103,13 +103,23 @@ function buildFlagsSection(flags: any[]): string {
     const dateStr = f.created_at
       ? new Date(f.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "America/Chicago" })
       : "unknown date";
+    const quotedLine = f.quoted_amount != null
+      ? `<div style="margin-bottom:6px;"><strong>Quoted amount:</strong> $${parseFloat(f.quoted_amount).toFixed(2)}</div>`
+      : "";
+    const conversionBadge = f.conversion === 'converted'
+      ? `<span style="background:#e6f4ea;color:#1e7e34;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;margin-left:8px;">CONVERTED</span>`
+      : f.conversion === 'abandoned'
+      ? `<span style="background:#fde8e8;color:#c0392b;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;margin-left:8px;">ABANDONED</span>`
+      : `<span style="background:#f0f0f0;color:#555;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;margin-left:8px;">UNKNOWN</span>`;
     return `<div style="border:1px solid #f0a500;border-radius:6px;margin-bottom:12px;overflow:hidden;">
-  <div style="background:#fff8e6;padding:10px 14px;border-bottom:1px solid #f0a500;">
+  <div style="background:#fff8e6;padding:10px 14px;border-bottom:1px solid #f0a500;display:flex;align-items:center;flex-wrap:wrap;gap:4px;">
     <strong style="color:#b45309;">&#128204; FLAG #${f.id} &mdash; ${escHtml(f.flag_reason)} &mdash; ${dateStr}</strong>
+    ${conversionBadge}
   </div>
   <div style="padding:12px 14px;background:#fffdf5;font-size:13px;line-height:1.6;">
-    <div style="margin-bottom:6px;"><strong>Customer said:</strong> &ldquo;${escHtml(f.customer_message)}&rdquo;</div>
-    <div style="margin-bottom:6px;"><strong>Bot responded:</strong> &ldquo;${escHtml(f.bot_response)}&rdquo;</div>
+    <div style="margin-bottom:6px;"><strong>Customer said:</strong> &ldquo;${escHtml(String(f.customer_message))}&rdquo;</div>
+    <div style="margin-bottom:6px;"><strong>Bot responded:</strong> &ldquo;${escHtml(String(f.bot_response))}&rdquo;</div>
+    ${quotedLine}
     <div style="margin-bottom:6px;"><strong>Suggested fix:</strong> ${escHtml(f.flag_detail || "(no detail provided)")}</div>
     <div style="margin-top:10px;"><a href="https://rcp-sms-bot-production.up.railway.app/api/admin/flags" style="color:#1a56db;">Review at admin panel &rarr;</a></div>
   </div>
@@ -124,12 +134,70 @@ function buildFlagsSection(flags: any[]): string {
 </div>`;
 }
 
+// ── Build pricing insights section HTML ─────────────────────────────────────
+function buildPricingInsightsSection(abandonedFlags: any[]): string {
+  if (abandonedFlags.length === 0) return "";
+
+  // Group by price bucket: <$500, $500-$1k, $1k-$3k, $3k-$10k, $10k+
+  const buckets: Record<string, number[]> = {
+    "Under $500": [],
+    "$500–$1,000": [],
+    "$1,000–$3,000": [],
+    "$3,000–$10,000": [],
+    "$10,000+": [],
+    "Amount unknown": [],
+  };
+
+  for (const f of abandonedFlags) {
+    const amt = f.quoted_amount != null ? parseFloat(f.quoted_amount) : null;
+    if (amt === null) { buckets["Amount unknown"].push(0); }
+    else if (amt < 500) { buckets["Under $500"].push(amt); }
+    else if (amt < 1000) { buckets["$500\u2013$1,000"].push(amt); }
+    else if (amt < 3000) { buckets["$1,000\u2013$3,000"].push(amt); }
+    else if (amt < 10000) { buckets["$3,000\u2013$10,000"].push(amt); }
+    else { buckets["$10,000+"].push(amt); }
+  }
+
+  const rows = Object.entries(buckets)
+    .filter(([, vals]) => vals.length > 0)
+    .map(([label, vals]) => {
+      const avg = vals.length > 0 && vals[0] !== 0 ? `avg $${(vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(0)}` : "";
+      return `<tr>
+        <td style="padding:6px 10px;border-bottom:1px solid #f0f0f0;">${escHtml(label)}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #f0f0f0;text-align:center;font-weight:700;color:#c0392b;">${vals.length}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #f0f0f0;color:#666;">${avg}</td>
+      </tr>`;
+    }).join("\n");
+
+  const totalRevenueLost = abandonedFlags
+    .filter(f => f.quoted_amount != null)
+    .reduce((sum, f) => sum + parseFloat(f.quoted_amount), 0);
+
+  return `<div style="margin-top:28px;">
+  <div style="background:#1a1a2e;color:#C8D400;padding:10px 16px;border-radius:6px 6px 0 0;font-weight:700;font-size:14px;">&#128200; Price Resistance Insights (Past 7 Days)</div>
+  <div style="padding:16px;background:#f9f9f9;border:1px solid #ddd;border-top:none;border-radius:0 0 6px 6px;">
+    <p style="margin:0 0 12px;font-size:13px;color:#333;"><strong>${abandonedFlags.length}</strong> quote${abandonedFlags.length !== 1 ? "s" : ""} abandoned mid-conversation${totalRevenueLost > 0 ? ` &mdash; up to <strong>$${totalRevenueLost.toFixed(0)}</strong> in potential revenue walked away` : ""}.</p>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <thead>
+        <tr style="background:#eee;">
+          <th style="padding:6px 10px;text-align:left;">Price range</th>
+          <th style="padding:6px 10px;text-align:center;">Abandonments</th>
+          <th style="padding:6px 10px;text-align:left;">Avg quoted</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>
+</div>`;
+}
+
 // ── Build HTML email ──────────────────────────────────────────────────────────
 function buildHtml(
   date: string,
   stats: { total: number; withOrders: number; issues: number },
   sections: string[],
   flagsHtml?: string,
+  pricingInsightsHtml?: string,
 ): string {
   const sentimentColor = stats.issues > 0 ? "#e53e3e" : "#38a169";
   const sentimentLabel = stats.issues > 0 ? `${stats.issues} need${stats.issues === 1 ? "s" : ""} attention` : "All clear";
@@ -188,6 +256,7 @@ function buildHtml(
       ? `<div class="no-convs">No conversations yesterday. Quiet day!</div>`
       : sections.join("\n")}
     ${flagsHtml || ""}
+    ${pricingInsightsHtml || ""}
   </div>
 </div>
 <div class="footer">Rebar Concrete Products &bull; 2112 N Custer Rd, McKinney TX &bull; Mon&ndash;Fri 6am&ndash;3pm</div>
@@ -278,10 +347,14 @@ export async function sendDailyDigest(): Promise<{ sent: boolean; reason?: strin
     timeZone: "America/Chicago",
   });
 
+  // Build pricing insights from abandoned flags
+  const abandonedFlags = pendingFlags.filter(f => f.flag_reason === 'abandoned_mid_quote');
+  const pricingInsightsHtml = buildPricingInsightsSection(abandonedFlags);
+
   if (recentConvs.length === 0) {
     // Still send a quiet-day email so Brian knows the system is running
     const flagsHtmlQuiet = buildFlagsSection(pendingFlags);
-    const html = buildHtml(dateLabel, { total: 0, withOrders: 0, issues: 0 }, [], flagsHtmlQuiet);
+    const html = buildHtml(dateLabel, { total: 0, withOrders: 0, issues: 0 }, [], flagsHtmlQuiet, pricingInsightsHtml);
     await transporter.sendMail({
       from: `"RCP AI Assistant" <${process.env.EMAIL_USER || OFFICE_EMAIL}>`,
       to: DIGEST_RECIPIENT,
@@ -340,6 +413,7 @@ export async function sendDailyDigest(): Promise<{ sent: boolean; reason?: strin
     { total: enriched.filter(e => e.msgs.length > 0).length, withOrders: orderCount, issues: issueCount },
     sections,
     flagsHtml,
+    pricingInsightsHtml,
   );
 
   const subjectFlag = issueCount > 0 ? ` ⚠️ ${issueCount} issue${issueCount > 1 ? "s" : ""}` : " ✓ All clear";
