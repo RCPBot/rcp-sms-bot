@@ -404,6 +404,14 @@ EXPANSION JOINT (FIBER): sold by the piece, 10 pieces per pack. Options: 4" ($4.
 SNAPCAP: must know size. Options: 1/2" ($4.23/10') or 3/4" ($5.98/10').
 - "snapcap" — Ask: "1/2" or 3/4"?"
 
+CONCRETE YARDAGE FORMULA (CRITICAL — always use this exact formula):
+  cubic_yards = (length_ft × width_ft × thickness_in) / (12 × 27)
+  = (length_ft × width_ft × thickness_in) / 324
+  NEVER divide sq ft by 81 — that only works for 4" slabs and will be wrong for any other thickness.
+  Example: 60×40 at 4" = (60×40×4)/324 = 9,600/324 = 29.63 yd → round up to 30 yd
+  Example: 50×100 at 6" = (50×100×6)/324 = 30,000/324 = 92.59 yd → round up to 93 yd
+  Always round UP to the nearest whole yard.
+
 CONCRETE: Options: 3000 psi 4.5 sack=$155, 3000 psi 5 sack=$160, 3500 psi 5.5 sack=$165, 3600 psi=$165, 4000 psi 6 sack=$170, 4500 psi 6.5 sack=$175 per yard.
 - If customer specifies PSI, use the matching mix immediately — do NOT ask to confirm it. Sack count is determined by PSI, never ask the customer for sack count.
 - If customer says just "3000 psi", default to 4.5 sack ($155). If they say "3500 psi", use 5.5 sack ($165) immediately.
