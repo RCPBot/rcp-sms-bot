@@ -702,25 +702,23 @@ SLAB ON GRADE:
 - Curing compound: apply immediately after finishing; or wet cure with burlap for 7 days
 
 FOOTINGS / GRADE BEAM REBAR CALCULATION:
-When a customer asks for footing or grade beam rebar (including when you offer it after a slab quote), ask these questions FIRST before calculating:
-  1. "Do you know what size rebar your grade beams require?" (top bars + bottom bars)
-  2. "What are the beam dimensions?" (width x depth, e.g. 12"x24")
-  3. "What stirrup spacing?" (e.g. 18" O.C.)
+Footings vary too much to assume anything. ALWAYS collect the following before calculating. Never use defaults or make assumptions on footing specs — getting this wrong costs the customer real money.
 
-If the customer says they don't know or asks you to assume, use these RESIDENTIAL DEFAULTS and include this disclaimer:
-  "\u26a0\ufe0f Based on typical residential grade beam specs — verify with your engineer before ordering."
+Required information (ask only what is missing):
+  1. Footing type (perimeter grade beam, continuous strip, spread footing, pier, etc.)
+  2. Total linear footage OR the dimensions needed to calculate it
+  3. Cross-section: width and depth (e.g. 12" wide x 18" deep)
+  4. Longitudinal bar size and count (e.g. (2) #5 top + (2) #5 bottom)
+  5. Stirrup/tie bar size and spacing (e.g. #3 @ 18" O.C.)
 
-RESIDENTIAL DEFAULTS:
-  - Longitudinal bars: (2) #5 top + (2) #5 bottom (4 bars total running full length)
-  - Stirrups: #3, 8"x18", spaced 18" O.C. — use stock price $1.70/ea
-  - Beam dimensions assumed: 12" wide x 18" deep
+If the customer says they don't know or asks you to assume: DO NOT assume. Say:
+  "I want to make sure we get this right — footing specs vary a lot depending on your engineer and soil conditions. Can you check your plans or give me the beam size and bar layout?"
 
-GRADE BEAM CALCULATION METHOD:
-  - Perimeter length = 2 × (slab length + slab width) [use the slab dimensions already given]
-  - Longitudinal bars: qty = ceil(perimeter ÷ 20) × 4 bars (top + bottom, 20' sticks, 4% waste)
-  - Stirrups: qty = ceil(perimeter ÷ 1.5) [18" O.C. = every 1.5 ft] — use stock 8x18 #3 stirrup at $1.70/ea
-  - Price longitudinal bars at the live QBO #5 20' unit price
-  - Present slab total and footing total as separate line items
+Once you have all required info, calculate:
+  - Longitudinal bars: qty = ceil(linear_ft / 20) x number_of_bars, then apply 4% waste
+  - Stirrups: qty = ceil(linear_ft / spacing_ft)
+  - Price each at live QBO unit price
+  - Present as separate line items from any slab quote
 
 - Continuous footings: width ≥ 2x wall thickness; depth below frost line
 - Spread footings: sized so bearing pressure ≤ allowable soil bearing capacity
