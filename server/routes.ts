@@ -4060,5 +4060,82 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       res.status(500).json({ sent: false, error: err.message });
     }
   });
-}
 
+  // ── Employee AI Dashboard — proxy endpoints (CORS open for static dashboard) ─
+  const RCP_EMPLOYEE_SYSTEM = `You are an AI assistant for Rebar Concrete Products (RCP) employees. Deep expertise in RCP products, pricing, and best practices.
+
+STOCK REBAR (default to 20' always):
+- #3=3/8", #4=1/2", #5=5/8", #6=3/4" — bundles: #3=266, #4=150, #5=96, #6=68
+- 40' rebar: full bundles only, never partial
+- Weight (lbs/ft): #3=0.376, #4=0.668, #5=1.043, #6=1.502
+- Fabrication fee: $0.75/lb for any non-stock length
+- Waste factor: 4% (x1.04). Lap lengths: #3=1.25ft, #4=1.67ft, #5=2.08ft, #6=2.5ft
+- Stirrups (3 sizes only): 6x18=$1.58, 8x18=$1.70, 8x24=$2.55
+- Slab rule: rectangular dims = always a slab, ceil() always rounds UP
+
+CONCRETE: ≤5yds=$350 short load flat. 6+yds=ceil(yds/10)×$70 delivery. Tax=8.25%.
+ACCESSORIES upsell: 2x4/2x6 (16' only), dobie bricks/chairs, tie wire, poly sheeting.
+ESTIMATES: +/-5% contingency, PRELIMINARY ESTIMATE disclaimer.
+Est. 2022. Be concise, use bullet points, real math.`;
+
+  function addEmpCors(res: any) {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  }
+
+  async function callEmpAI(messages: { role: string; content: string }[], systemExtra?: string): Promise<string> {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) return "OpenAI not configured on the server.";
+    const system = systemExtra ? `${RCP_EMPLOYEE_SYSTEM}\n\n${systemExtra}` : RCP_EMPLOYEE_SYSTEM;
+    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ model: "gpt-4o-mini", messages: [{ role: "system", content: system }, ...messages], max_tokens: 600, temperature: 0.3 }),
+    });
+    const j = await r.json() as any;
+    return j.choices?.[0]?.message?.content || "No response.";
+  }
+
+  app.options("/api/employee/:path", (req, res) => { addEmpCors(res); res.sendStatus(204); });
+
+  app.post("/api/employee/assist", express.json(), async (req, res) => {
+    addEmpCors(res);
+    try {
+      const { question, history } = req.body;
+      if (!question) return res.status(400).json({ error: "question required" });
+      let priceCtx = "";
+      try { const items = await getQboItems(); priceCtx = "\n\nLIVE QBO PRICES:\n" + items.slice(0, 40).map((i: any) => `- ${i.name}: $${i.unitPrice}`).join("\n"); } catch {}
+      const msgs = [...(history || []), { role: "user", content: `CUSTOMER SITUATION: ${question}\n\nGive me a concise answer I can use with this customer right now. Include correct product, price if relevant, and any upsell to mention.` }];
+      const reply = await callEmpAI(msgs, `AI ASSIST MODE.${priceCtx}`);
+      res.json({ reply });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post("/api/employee/check-quote", express.json(), async (req, res) => {
+    addEmpCors(res);
+    try {
+      const { quote } = req.body;
+      if (!quote) return res.status(400).json({ error: "quote required" });
+      let priceCtx = "";
+      try { const items = await getQboItems(); priceCtx = "\n\nLIVE QBO PRICES:\n" + items.slice(0, 40).map((i: any) => `- ${i.name}: $${i.unitPrice}`).join("\n"); } catch {}
+      const msgs = [{ role: "user", content: `Check this employee quote for ALL RCP rule errors:\n\n${quote}\n\nList every error (pricing, 4% waste, ceil() rounding, lap lengths, fab fees, delivery/short-load fees, tax, accessories reminder). If correct say so. Be specific: what's wrong and correct value.` }];
+      const reply = await callEmpAI(msgs, `ERROR PREVENTION MODE.${priceCtx}`);
+      const hasErrors = /error|wrong|incorrect|missing|should be|mistake/i.test(reply);
+      res.json({ reply, hasErrors });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post("/api/employee/train", express.json(), async (req, res) => {
+    addEmpCors(res);
+    try {
+      const { topic, history, mode } = req.body;
+      let userMsg = topic;
+      if (mode === "explain") userMsg = `Explain with a real RCP example and exact math: ${topic}`;
+      else if (mode === "quiz") userMsg = `Give me a quiz question about: ${topic}. Just the question and 4 multiple choice options (A/B/C/D). Don't give the answer yet.`;
+      const msgs = [...(history || []), { role: "user", content: userMsg }];
+      const reply = await callEmpAI(msgs, "TRAINING MODE. Be a great teacher — precise, encouraging, real RCP examples.");
+      res.json({ reply });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+}
