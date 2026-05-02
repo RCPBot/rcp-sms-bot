@@ -337,11 +337,13 @@ Step 3 — Total raw sticks (before laps):
 
 Step 4 — Add lap splice material (REQUIRED when any row needs more than one 20' bar):
   When a row spans more than 20 ft, bars must overlap at every joint. Each joint consumes extra bar.
-  Lap lengths per ACI 318, Grade 60, 3000 psi, slab/footing bottom bars (Class B):
-    #3 = 18"  (1.5 ft)
-    #4 = 24"  (2.0 ft)
-    #5 = 24"  (2.0 ft)
-    #6 = 30"  (2.5 ft)
+  Use the 40× bar diameter field standard (residential/light commercial, non-engineered slabs and footings):
+    #3 = 15"  (1.25 ft)  [40 × 0.375"]
+    #4 = 20"  (1.67 ft)  [40 × 0.500"]
+    #5 = 25"  (2.08 ft)  [40 × 0.625"]
+    #6 = 30"  (2.50 ft)  [40 × 0.750"]
+  For inspected/engineered jobs: follow the engineer's plans — lap is already specified.
+  For big bars (#7+): do not guess — tell customer to follow engineered plans or call us.
   joints_A = rows_A × (sticks_per_row_A - 1)   ← joints only exist where sticks_per_row > 1
   joints_B = rows_B × (sticks_per_row_B - 1)
   total_joints = joints_A + joints_B
@@ -352,29 +354,29 @@ Step 4 — Add lap splice material (REQUIRED when any row needs more than one 20
 Step 5 — Add 7% waste:
   final_qty = ceil(total_sticks_with_laps × 1.07)
 
-CORRECT EXAMPLE — 50×100 slab, #3 @ 12" OC (lap = 1.5 ft):
+CORRECT EXAMPLE — 50×100 slab, #3 @ 12" OC (lap = 1.25 ft):
   rows_A = ceil(100/1)+1 = 101 rows spanning 50ft → sticks_per_row=ceil(50/20)=3 → 101×3=303 sticks, joints=101×2=202
   rows_B = ceil(50/1)+1 = 51 rows spanning 100ft → sticks_per_row=ceil(100/20)=5 → 51×5=255 sticks, joints=51×4=204
   total_sticks = 558, total_joints = 406
-  lap_extra = ceil(406×1.5/20) = ceil(30.45) = 31 sticks
-  total_with_laps = 558+31 = 589 sticks × 1.07 = 630 sticks
+  lap_extra = ceil(406×1.25/20) = ceil(25.375) = 26 sticks
+  total_with_laps = 558+26 = 584 sticks × 1.07 = 625 sticks
 
 WRONG EXAMPLE (NEVER DO THIS): "ceil(50/1)+1 = 51 bars one way + ceil(100/1)+1 = 101 bars other way = 152 bars"
   This only counts rows, NOT the 20' sticks needed to fill each row. It is always massively wrong.
 
-CORRECT EXAMPLE — 60×40 slab, #4 @ 18" OC (lap = 2.0 ft):
+CORRECT EXAMPLE — 60×40 slab, #4 @ 18" OC (lap = 1.67 ft):
   rows_A = ceil(40/1.5)+1=28 rows spanning 60ft → sticks=ceil(60/20)=3 → 28×3=84, joints=28×2=56
   rows_B = ceil(60/1.5)+1=41 rows spanning 40ft → sticks=ceil(40/20)=2 → 41×2=82, joints=41×1=41
   total_sticks=166, total_joints=97
-  lap_extra=ceil(97×2.0/20)=ceil(9.7)=10 sticks
-  total_with_laps=176 sticks × 1.07 = 189 sticks
+  lap_extra=ceil(97×1.67/20)=ceil(8.1)=9 sticks
+  total_with_laps=175 sticks × 1.07 = 188 sticks
 
-CORRECT EXAMPLE — 80×100 slab, #3 @ 18" OC (lap = 1.5 ft):
+CORRECT EXAMPLE — 80×100 slab, #3 @ 18" OC (lap = 1.25 ft):
   rows_A = ceil(100/1.5)+1=68 rows spanning 80ft → sticks=ceil(80/20)=4 → 68×4=272, joints=68×3=204
   rows_B = ceil(80/1.5)+1=54 rows spanning 100ft → sticks=ceil(100/20)=5 → 54×5=270, joints=54×4=216
   total_sticks=542, total_joints=420
-  lap_extra=ceil(420×1.5/20)=ceil(31.5)=32 sticks
-  total_with_laps=574 sticks × 1.07 = 615 sticks
+  lap_extra=ceil(420×1.25/20)=ceil(26.25)=27 sticks
+  total_with_laps=569 sticks × 1.07 = 609 sticks
 
 Price = final_qty × unit_price_per_stick from QBO. Do NOT multiply by bundle size. Invoice qty = final_qty sticks.
 Always show the lap calculation transparently in your response so the customer understands why they need extra bars.
