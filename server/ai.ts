@@ -351,15 +351,15 @@ Step 4 — Add lap splice material (REQUIRED when any row needs more than one 20
   total_sticks_with_laps = total_sticks + lap_extra_sticks
   NOTE: If sticks_per_row = 1 (slab dimension ≤ 20 ft), joints = 0 → no lap material needed.
 
-Step 5 — Add 7% waste:
-  final_qty = ceil(total_sticks_with_laps × 1.07)
+Step 5 — Add 4% waste:
+  final_qty = ceil(total_sticks_with_laps × 1.04)
 
 CORRECT EXAMPLE — 50×100 slab, #3 @ 12" OC (lap = 1.25 ft):
   rows_A = ceil(100/1)+1 = 101 rows spanning 50ft → sticks_per_row=ceil(50/20)=3 → 101×3=303 sticks, joints=101×2=202
   rows_B = ceil(50/1)+1 = 51 rows spanning 100ft → sticks_per_row=ceil(100/20)=5 → 51×5=255 sticks, joints=51×4=204
   total_sticks = 558, total_joints = 406
   lap_extra = ceil(406×1.25/20) = ceil(25.375) = 26 sticks
-  total_with_laps = 558+26 = 584 sticks × 1.07 = 625 sticks
+  total_with_laps = 558+26 = 584 sticks × 1.04 = ceil(607.36) = 608 sticks
 
 WRONG EXAMPLE (NEVER DO THIS): "ceil(50/1)+1 = 51 bars one way + ceil(100/1)+1 = 101 bars other way = 152 bars"
   This only counts rows, NOT the 20' sticks needed to fill each row. It is always massively wrong.
@@ -369,21 +369,21 @@ CORRECT EXAMPLE — 60×40 slab, #4 @ 18" OC (lap = 1.67 ft):
   rows_B = ceil(60/1.5)+1=41 rows spanning 40ft → sticks=ceil(40/20)=2 → 41×2=82, joints=41×1=41
   total_sticks=166, total_joints=97
   lap_extra=ceil(97×1.67/20)=ceil(8.1)=9 sticks
-  total_with_laps=175 sticks × 1.07 = 188 sticks
+  total_with_laps=175 sticks × 1.04 = ceil(182) = 182 sticks
 
 CORRECT EXAMPLE — 80×100 slab, #3 @ 18" OC (lap = 1.25 ft):
   rows_A = ceil(100/1.5)+1=68 rows spanning 80ft → sticks=ceil(80/20)=4 → 68×4=272, joints=68×3=204
   rows_B = ceil(80/1.5)+1=54 rows spanning 100ft → sticks=ceil(100/20)=5 → 54×5=270, joints=54×4=216
   total_sticks=542, total_joints=420
   lap_extra=ceil(420×1.25/20)=ceil(26.25)=27 sticks
-  total_with_laps=569 sticks × 1.07 = 609 sticks
+  total_with_laps=569 sticks × 1.04 = ceil(591.76) = 592 sticks
 
 CORRECT EXAMPLE — 30×40 slab, #4 @ 12" OC (lap = 1.67 ft):
   rows_A = ceil(30/1)+1=31 rows spanning 40ft → sticks=ceil(40/20)=2 → 31×2=62 sticks, joints=31×1=31
   rows_B = ceil(40/1)+1=41 rows spanning 30ft → sticks=ceil(30/20)=2 → 41×2=82 sticks, joints=41×1=41
   total_sticks=144, total_joints=72
   lap_extra=ceil(72×1.67/20)=ceil(6.012)=7 sticks  ← CRITICAL: ceil(6.012)=7, NOT 6. Any decimal means round UP.
-  total_with_laps=151 sticks × 1.07 = ceil(161.57) = 162 sticks
+  total_with_laps=151 sticks × 1.04 = ceil(157.04) = 158 sticks
 
 Price = final_qty × unit_price_per_stick from QBO. Do NOT multiply by bundle size. Invoice qty = final_qty sticks.
 Always show the lap calculation transparently in your response so the customer understands why they need extra bars.
@@ -717,7 +717,7 @@ RESIDENTIAL DEFAULTS:
 
 GRADE BEAM CALCULATION METHOD:
   - Perimeter length = 2 × (slab length + slab width) [use the slab dimensions already given]
-  - Longitudinal bars: qty = ceil(perimeter ÷ 20) × 4 bars (top + bottom, 20' sticks, 7% waste)
+  - Longitudinal bars: qty = ceil(perimeter ÷ 20) × 4 bars (top + bottom, 20' sticks, 4% waste)
   - Stirrups: qty = ceil(perimeter ÷ 1.5) [18" O.C. = every 1.5 ft] — use stock 8x18 #3 stirrup at $1.70/ea
   - Price longitudinal bars at the live QBO #5 20' unit price
   - Present slab total and footing total as separate line items
