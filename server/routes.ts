@@ -3,7 +3,7 @@ import type { Server } from "http";
 import express from "express";
 import { storage } from "./storage";
 import { sendSms, isTwilioConfigured, sendPaymentLinkEmail, sendEstimateEmail, sendStaffOrderNotification, sendVerificationCode } from "./sms";
-import { processMessage, extractOrderFromConversation, extractCustomerInfo, isAiConfigured } from "./ai";
+import { processMessage, extractOrderFromConversation, extractCustomerInfo, isAiConfigured, checkAndFlagConversation, checkAbandonedMidQuote, inferCustomerType } from "./ai";
 import { syncProducts, findOrCreateCustomer, findExistingCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice, updateRailwayEnvVar, setLiveRefreshToken, getOrCreateBotCustomer, getOrCreateEstCustomer, getQboItems, getInvoiceById, getPurchaseOrders, qboGet, fetchEstimatePdf } from "./qbo";
 import { performTakeoff } from "./takeoff";
 import { resolveLinksFromText, extractUrls } from "./link-resolver";
@@ -795,6 +795,17 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
           await storage.updateConversation(conv.id, { stage: "invoiced", status: "active", pendingImagesJson: null });
 
+          // Record order completion in customer memory (fire-and-forget)
+          if (total > 0) {
+            const orderDate = new Date().toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/Chicago' });
+            const orderSummary = `Invoice #${invoiceNumber} — $${total.toFixed(2)} — ${orderDate}`;
+            storage.recordOrderCompletion(cleanPhone, total, orderSummary, []).catch(err =>
+              console.warn('[SMS] recordOrderCompletion error:', err?.message)
+            );
+            // Mark any open flags for this conversation as converted
+            storage.updateFlagConversion(conv.id, 'converted').catch(() => {});
+          }
+
           const dLine = deliveryFee > 0 ? `\nDelivery: $${deliveryFee.toFixed(2)}` : "";
           const payMsg = paymentLink
             ? `Great! Here is your payment link for Invoice #${invoiceNumber}:\n\n${paymentLink}\n\nSubtotal: $${subtotal.toFixed(2)}\nTax (8.25%): $${taxAmount.toFixed(2)}${dLine}\nTotal: $${total.toFixed(2)}\n\nWe'll also email the invoice to ${conv.customerEmail}. Thank you!`
@@ -941,8 +952,28 @@ export function registerRoutes(httpServer: Server, app: Express) {
         }
       }
 
+      // Fetch customer memory for repeat customer recognition
+      let customerMemoryRecord: any | null = null;
+      try {
+        customerMemoryRecord = await storage.getCustomerMemory(cleanPhone);
+      } catch (memErr: any) {
+        console.warn('[SMS] Failed to fetch customer memory:', memErr?.message);
+      }
+
+      // Keep customer memory current for verified customers
+      if (conv.customerName) {
+        const knownData: Record<string, any> = {};
+        if (conv.customerName) knownData.name = conv.customerName;
+        if (conv.customerEmail) knownData.email = conv.customerEmail;
+        if (conv.customerCompany) knownData.company = conv.customerCompany;
+        if (conv.deliveryAddress) knownData.deliveryAddress = conv.deliveryAddress;
+        storage.upsertCustomerMemory(cleanPhone, knownData).catch(err =>
+          console.warn('[SMS] Customer memory background upsert error:', err?.message)
+        );
+      }
+
       // Handle the message with AI (pass image URLs if any)
-      const intent = await processMessage(conv, cleanBody, mediaUrls, undefined, justAutoVerified);
+      const intent = await processMessage(conv, cleanBody, mediaUrls, undefined, justAutoVerified, customerMemoryRecord);
 
       // ── Handle delivery fee calculation ───────────────────────────────────────
       if (intent.type === "calc_delivery") {
@@ -995,6 +1026,10 @@ export function registerRoutes(httpServer: Server, app: Express) {
           body: replyText,
         });
         await sendSms(cleanPhone, replyText);
+        // Fire-and-forget auto-flag check (never delay the SMS response)
+        checkAndFlagConversation(conv.id, cleanBody, replyText).catch(err =>
+          console.warn('[SMS] Auto-flag error:', err?.message)
+        );
       } else if (!replyText && intent.type !== "lookup_orders" && intent.type !== "plan_takeoff") {
         // AI returned no text — send a fallback so the customer isn't left hanging
         const fallback = "Sorry, I wasn't able to process that. Please call us at 469-631-7730 and we'll help you out.";
@@ -1014,6 +1049,18 @@ export function registerRoutes(httpServer: Server, app: Express) {
           deliveryAddress: info.deliveryAddress || conv.deliveryAddress,
           stage: "ordering",
         });
+
+        // Upsert customer memory with verified info
+        const memUpdateData: Record<string, any> = {};
+        if (info.name || conv.customerName) memUpdateData.name = info.name || conv.customerName;
+        if (info.email || conv.customerEmail) memUpdateData.email = info.email || conv.customerEmail;
+        if (info.company || conv.customerCompany) memUpdateData.company = info.company || conv.customerCompany;
+        if (info.deliveryAddress || conv.deliveryAddress) memUpdateData.deliveryAddress = info.deliveryAddress || conv.deliveryAddress;
+        if (Object.keys(memUpdateData).length > 0) {
+          storage.upsertCustomerMemory(cleanPhone, memUpdateData).catch(err =>
+            console.warn('[SMS] Customer memory upsert error:', err?.message)
+          );
+        }
 
         // ── Auto-trigger takeoff if a PDF was attached before verification ──
         // Customer sent a PDF with their first message — it's been sitting in
@@ -1855,10 +1902,10 @@ export function registerRoutes(httpServer: Server, app: Express) {
       }
 
       await storage.addMessage({ conversationId, direction: "outbound", body: confirmMsg });
-      const smsSent = await sendSms(phone, confirmMsg);
+      await sendSms(phone, confirmMsg);
 
       // Email fallback if SMS fails
-      if (!smsSent && paymentLink && customerEmail) {
+      if (paymentLink && customerEmail) {
         try {
           await sendPaymentLinkEmail({
             to: customerEmail,
@@ -1871,6 +1918,18 @@ export function registerRoutes(httpServer: Server, app: Express) {
       }
 
       await storage.updateConversation(conversationId, { stage: "invoiced", status: "active" });
+
+      // Record order completion in customer memory (fire-and-forget)
+      try {
+        const orderDate = new Date().toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/Chicago' });
+        const estTotal = (await storage.getEstimate(estimateDbId))?.subtotal || 0;
+        if (estTotal > 0 || invoiceNumber) {
+          const orderSummary = `Estimate-to-Invoice #${invoiceNumber} — ${orderDate}`;
+          storage.recordOrderCompletion(phone, estTotal, orderSummary, []).catch(() => {});
+          storage.updateFlagConversion(conversationId, 'converted').catch(() => {});
+        }
+      } catch (_) {}
+
     } catch (err) {
       console.error("[Estimate] Approval handler failed:", err);
       try {
@@ -2550,7 +2609,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
               customerName,
               invoiceNumber,
               total,
-              paymentLink: materialsInv.paymentLink,
+              paymentLink: materialsInv.paymentLink ?? "",
             });
           } catch (emailErr) {
             console.warn("[WEB-ORDER] Email send failed:", emailErr);
@@ -2591,7 +2650,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
               customerName,
               invoiceNumber,
               total,
-              paymentLink,
+              paymentLink: paymentLink ?? "",
             });
           } catch (emailErr) {
             console.warn("[WEB-ORDER] Email send failed:", emailErr);
@@ -3437,12 +3496,12 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
           for (const m of msgsToSave) {
             if (!m.content?.trim()) continue;
             const direction = m.role === "user" ? "inbound" : "outbound";
-            await storage.addMessage({ conversationId: conv.id, direction, body: m.content, createdAt: new Date() });
+            await storage.addMessage({ conversationId: conv.id, direction, body: m.content });
           }
 
           // Always append the latest bot reply as outbound
           if (lastReply) {
-            await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: lastReply, createdAt: new Date() });
+            await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: lastReply });
           }
 
           // Update conversation name/email if we now know them
@@ -3865,6 +3924,74 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
     } catch (err: any) {
       console.error('[PO Audit] Error:', err);
       res.status(500).json({ sent: false, error: err.message });
+    }
+  });
+
+  // ── /api/admin/flags — self-learning flagged conversations ────────────────
+  app.get("/api/admin/flags", async (_req, res) => {
+    try {
+      const flags = await storage.getPendingFlags();
+      res.json(flags);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/admin/flags/:id/approve", express.json(), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const { ruleText, category } = req.body;
+      if (!ruleText || !category) {
+        return res.status(400).json({ error: "ruleText and category are required" });
+      }
+      await storage.reviewFlag(id, "approved");
+      await storage.addLearnedRule(ruleText, category, id);
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/admin/flags/:id/dismiss", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      await storage.reviewFlag(id, "dismissed");
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── /api/admin/learned-rules — self-learning rules ───────────────────────
+  app.get("/api/admin/learned-rules", async (_req, res) => {
+    try {
+      const rules = await storage.getLearnedRules();
+      res.json(rules);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/admin/learned-rules", express.json(), async (req, res) => {
+    try {
+      const { ruleText, category } = req.body;
+      if (!ruleText || !category) {
+        return res.status(400).json({ error: "ruleText and category are required" });
+      }
+      await storage.addLearnedRule(ruleText, category);
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete("/api/admin/learned-rules/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      await storage.deactivateLearnedRule(id);
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
   });
 

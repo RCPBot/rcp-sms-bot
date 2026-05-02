@@ -82,6 +82,55 @@ export const settings = pgTable("settings", {
   value: text("value").notNull(),
 });
 
+// ── Flagged Conversations ─────────────────────────────────────────────────────
+export const flaggedConversations = pgTable("flagged_conversations", {
+  id: serial("id").primaryKey(),
+  conversationId: integer("conversation_id").references(() => conversations.id),
+  source: text("source").notNull(), // 'sms' | 'web'
+  flagReason: text("flag_reason").notNull(), // 'customer_correction' | 'bot_claimed_wrong' | 'unanswered_question' | 'abandoned_mid_quote'
+  flagDetail: text("flag_detail").notNull(),
+  customerMessage: text("customer_message").notNull(),
+  botResponse: text("bot_response").notNull(),
+  status: text("status").notNull().default("pending"), // 'pending' | 'approved' | 'dismissed'
+  quotedAmount: real("quoted_amount"),           // price quoted when flag was triggered (if any)
+  conversion: text("conversion"),                // 'converted' | 'abandoned' | 'unknown'
+  reviewedAt: timestamp("reviewed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ── Learned Rules ─────────────────────────────────────────────────────────────
+export const learnedRules = pgTable("learned_rules", {
+  id: serial("id").primaryKey(),
+  ruleText: text("rule_text").notNull(),
+  sourceFlagId: integer("source_flag_id").references(() => flaggedConversations.id),
+  category: text("category").notNull(), // 'product' | 'pricing' | 'behavior' | 'correction'
+  addedBy: text("added_by").notNull().default("brian"),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ── Customer Memory ───────────────────────────────────────────────────────────
+export const customerMemory = pgTable("customer_memory", {
+  id: serial("id").primaryKey(),
+  phone: text("phone").notNull().unique(),
+  name: text("name"),
+  email: text("email"),
+  company: text("company"),
+  deliveryAddress: text("delivery_address"),
+  typicalBarSizes: text("typical_bar_sizes"),
+  typicalProducts: text("typical_products"),
+  lastOrderSummary: text("last_order_summary"),
+  orderCount: integer("order_count").notNull().default(0),
+  totalSpent: real("total_spent").notNull().default(0),
+  avgOrderValue: real("avg_order_value").notNull().default(0),
+  largestOrderValue: real("largest_order_value").notNull().default(0),
+  mostOrderedProduct: text("most_ordered_product"),
+  customerType: text("customer_type"),              // 'contractor' | 'homeowner' | 'developer' | 'unknown'
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // ── Insert Schemas ────────────────────────────────────────────────────────────
 export const insertConversationSchema = createInsertSchema(conversations).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertMessageSchema = createInsertSchema(messages).omit({ id: true, createdAt: true });

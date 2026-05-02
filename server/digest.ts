@@ -6,7 +6,7 @@
 
 import * as nodemailer from "nodemailer";
 import OpenAI from "openai";
-import { db } from "./storage";
+import { db, storage } from "./storage";
 import { conversations, messages, orders } from "@shared/schema";
 import { desc, gte, eq } from "drizzle-orm";
 
@@ -95,11 +95,41 @@ sentiment guide:
   }
 }
 
+// ── Build pending flags section HTML ─────────────────────────────────────────
+function buildFlagsSection(flags: any[]): string {
+  if (flags.length === 0) return "";
+
+  const flagItems = flags.map(f => {
+    const dateStr = f.created_at
+      ? new Date(f.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "America/Chicago" })
+      : "unknown date";
+    return `<div style="border:1px solid #f0a500;border-radius:6px;margin-bottom:12px;overflow:hidden;">
+  <div style="background:#fff8e6;padding:10px 14px;border-bottom:1px solid #f0a500;">
+    <strong style="color:#b45309;">&#128204; FLAG #${f.id} &mdash; ${escHtml(f.flag_reason)} &mdash; ${dateStr}</strong>
+  </div>
+  <div style="padding:12px 14px;background:#fffdf5;font-size:13px;line-height:1.6;">
+    <div style="margin-bottom:6px;"><strong>Customer said:</strong> &ldquo;${escHtml(f.customer_message)}&rdquo;</div>
+    <div style="margin-bottom:6px;"><strong>Bot responded:</strong> &ldquo;${escHtml(f.bot_response)}&rdquo;</div>
+    <div style="margin-bottom:6px;"><strong>Suggested fix:</strong> ${escHtml(f.flag_detail || "(no detail provided)")}</div>
+    <div style="margin-top:10px;"><a href="https://rcp-sms-bot-production.up.railway.app/api/admin/flags" style="color:#1a56db;">Review at admin panel &rarr;</a></div>
+  </div>
+</div>`;
+  }).join("\n");
+
+  return `<div style="margin-top:28px;">
+  <div style="background:#b45309;color:#fff;padding:10px 16px;border-radius:6px 6px 0 0;font-weight:700;font-size:14px;">&#9888; ${flags.length} Flagged Conversation${flags.length !== 1 ? "s" : ""} Needing Review</div>
+  <div style="padding:16px;background:#fffff5;border:1px solid #f0a500;border-top:none;border-radius:0 0 6px 6px;">
+    ${flagItems}
+  </div>
+</div>`;
+}
+
 // ── Build HTML email ──────────────────────────────────────────────────────────
 function buildHtml(
   date: string,
   stats: { total: number; withOrders: number; issues: number },
   sections: string[],
+  flagsHtml?: string,
 ): string {
   const sentimentColor = stats.issues > 0 ? "#e53e3e" : "#38a169";
   const sentimentLabel = stats.issues > 0 ? `${stats.issues} need${stats.issues === 1 ? "s" : ""} attention` : "All clear";
@@ -157,6 +187,7 @@ function buildHtml(
     ${sections.length === 0
       ? `<div class="no-convs">No conversations yesterday. Quiet day!</div>`
       : sections.join("\n")}
+    ${flagsHtml || ""}
   </div>
 </div>
 <div class="footer">Rebar Concrete Products &bull; 2112 N Custer Rd, McKinney TX &bull; Mon&ndash;Fri 6am&ndash;3pm</div>
@@ -222,6 +253,16 @@ export async function sendDailyDigest(): Promise<{ sent: boolean; reason?: strin
     return { sent: false, reason: "No email transport configured" };
   }
 
+  // Fetch pending flags from the past 7 days
+  let pendingFlags: any[] = [];
+  try {
+    const allFlags = await storage.getPendingFlags();
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    pendingFlags = allFlags.filter(f => f.created_at && new Date(f.created_at) >= sevenDaysAgo);
+  } catch (err: any) {
+    console.warn('[Digest] Failed to fetch pending flags:', err?.message);
+  }
+
   // Fetch conversations updated in the last 24 hours
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
@@ -239,7 +280,8 @@ export async function sendDailyDigest(): Promise<{ sent: boolean; reason?: strin
 
   if (recentConvs.length === 0) {
     // Still send a quiet-day email so Brian knows the system is running
-    const html = buildHtml(dateLabel, { total: 0, withOrders: 0, issues: 0 }, []);
+    const flagsHtmlQuiet = buildFlagsSection(pendingFlags);
+    const html = buildHtml(dateLabel, { total: 0, withOrders: 0, issues: 0 }, [], flagsHtmlQuiet);
     await transporter.sendMail({
       from: `"RCP AI Assistant" <${process.env.EMAIL_USER || OFFICE_EMAIL}>`,
       to: DIGEST_RECIPIENT,
@@ -292,10 +334,12 @@ export async function sendDailyDigest(): Promise<{ sent: boolean; reason?: strin
     await new Promise(r => setTimeout(r, 300));
   }
 
+  const flagsHtml = buildFlagsSection(pendingFlags);
   const html = buildHtml(
     dateLabel,
     { total: enriched.filter(e => e.msgs.length > 0).length, withOrders: orderCount, issues: issueCount },
     sections,
+    flagsHtml,
   );
 
   const subjectFlag = issueCount > 0 ? ` ⚠️ ${issueCount} issue${issueCount > 1 ? "s" : ""}` : " ✓ All clear";

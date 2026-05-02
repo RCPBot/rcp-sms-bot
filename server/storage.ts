@@ -94,6 +94,76 @@ async function runMigrations() {
       cut_sheet_emailed_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS flagged_conversations (
+      id SERIAL PRIMARY KEY,
+      conversation_id INTEGER REFERENCES conversations(id),
+      source TEXT NOT NULL,
+      flag_reason TEXT NOT NULL,
+      flag_detail TEXT NOT NULL,
+      customer_message TEXT NOT NULL,
+      bot_response TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      quoted_amount REAL,
+      conversion TEXT,
+      reviewed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    -- Add new columns to flagged_conversations if upgrading existing DB
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='flagged_conversations' AND column_name='quoted_amount') THEN
+        ALTER TABLE flagged_conversations ADD COLUMN quoted_amount REAL;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='flagged_conversations' AND column_name='conversion') THEN
+        ALTER TABLE flagged_conversations ADD COLUMN conversion TEXT;
+      END IF;
+    END $$;
+
+    CREATE TABLE IF NOT EXISTS learned_rules (
+      id SERIAL PRIMARY KEY,
+      rule_text TEXT NOT NULL,
+      source_flag_id INTEGER REFERENCES flagged_conversations(id),
+      category TEXT NOT NULL,
+      added_by TEXT NOT NULL DEFAULT 'brian',
+      active BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS customer_memory (
+      id SERIAL PRIMARY KEY,
+      phone TEXT UNIQUE NOT NULL,
+      name TEXT,
+      email TEXT,
+      company TEXT,
+      delivery_address TEXT,
+      typical_bar_sizes TEXT,
+      typical_products TEXT,
+      last_order_summary TEXT,
+      order_count INTEGER NOT NULL DEFAULT 0,
+      total_spent REAL NOT NULL DEFAULT 0,
+      avg_order_value REAL NOT NULL DEFAULT 0,
+      largest_order_value REAL NOT NULL DEFAULT 0,
+      most_ordered_product TEXT,
+      customer_type TEXT,
+      notes TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    -- Add new columns to customer_memory if upgrading existing DB
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='customer_memory' AND column_name='avg_order_value') THEN
+        ALTER TABLE customer_memory ADD COLUMN avg_order_value REAL NOT NULL DEFAULT 0;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='customer_memory' AND column_name='largest_order_value') THEN
+        ALTER TABLE customer_memory ADD COLUMN largest_order_value REAL NOT NULL DEFAULT 0;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='customer_memory' AND column_name='most_ordered_product') THEN
+        ALTER TABLE customer_memory ADD COLUMN most_ordered_product TEXT;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='customer_memory' AND column_name='customer_type') THEN
+        ALTER TABLE customer_memory ADD COLUMN customer_type TEXT;
+      END IF;
+    END $$;
   `);
 }
 
@@ -134,6 +204,22 @@ export interface IStorage {
   // Settings
   getSetting(key: string): Promise<string | null>;
   setSetting(key: string, value: string): Promise<void>;
+
+  // Flagged conversations
+  flagConversation(data: { conversationId: number, source: string, flagReason: string, flagDetail: string, customerMessage: string, botResponse: string, quotedAmount?: number, conversion?: string }): Promise<void>;
+  updateFlagConversion(conversationId: number, conversion: 'converted' | 'abandoned'): Promise<void>;
+  getPendingFlags(): Promise<any[]>;
+  reviewFlag(id: number, status: 'approved' | 'dismissed'): Promise<void>;
+
+  // Learned rules
+  addLearnedRule(ruleText: string, category: string, sourceFlagId?: number): Promise<void>;
+  getLearnedRules(): Promise<{ id: number, ruleText: string, category: string }[]>;
+  deactivateLearnedRule(id: number): Promise<void>;
+
+  // Customer memory
+  upsertCustomerMemory(phone: string, data: Partial<{name:string, email:string, company:string, deliveryAddress:string, typicalBarSizes:string, typicalProducts:string, lastOrderSummary:string, orderCount:number, totalSpent:number, avgOrderValue:number, largestOrderValue:number, mostOrderedProduct:string, customerType:string, notes:string}>): Promise<void>;
+  getCustomerMemory(phone: string): Promise<any | null>;
+  recordOrderCompletion(phone: string, orderTotal: number, orderSummary: string, lineItems: Array<{name: string, qty: number}>): Promise<void>;
 }
 
 export class Storage implements IStorage {
@@ -297,6 +383,157 @@ export class Storage implements IStorage {
       `INSERT INTO settings (key, value) VALUES ($1, $2)
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
       [key, value]
+    );
+  }
+
+  // ── Flagged conversations ────────────────────────────────────────────────────
+  async flagConversation(data: { conversationId: number, source: string, flagReason: string, flagDetail: string, customerMessage: string, botResponse: string, quotedAmount?: number, conversion?: string }): Promise<void> {
+    await pool.query(
+      `INSERT INTO flagged_conversations (conversation_id, source, flag_reason, flag_detail, customer_message, bot_response, quoted_amount, conversion)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [data.conversationId, data.source, data.flagReason, data.flagDetail, data.customerMessage, data.botResponse, data.quotedAmount ?? null, data.conversion ?? 'unknown']
+    );
+  }
+
+  async updateFlagConversion(conversationId: number, conversion: 'converted' | 'abandoned'): Promise<void> {
+    await pool.query(
+      `UPDATE flagged_conversations SET conversion = $1 WHERE conversation_id = $2 AND conversion = 'unknown'`,
+      [conversion, conversationId]
+    );
+  }
+
+  async getPendingFlags(): Promise<any[]> {
+    const result = await pool.query(
+      `SELECT * FROM flagged_conversations WHERE status = 'pending' ORDER BY created_at DESC`
+    );
+    return result.rows;
+  }
+
+  async reviewFlag(id: number, status: 'approved' | 'dismissed'): Promise<void> {
+    await pool.query(
+      `UPDATE flagged_conversations SET status = $1, reviewed_at = NOW() WHERE id = $2`,
+      [status, id]
+    );
+  }
+
+  // ── Learned rules ────────────────────────────────────────────────────────────
+  async addLearnedRule(ruleText: string, category: string, sourceFlagId?: number): Promise<void> {
+    await pool.query(
+      `INSERT INTO learned_rules (rule_text, category, source_flag_id) VALUES ($1, $2, $3)`,
+      [ruleText, category, sourceFlagId ?? null]
+    );
+  }
+
+  async getLearnedRules(): Promise<{ id: number, ruleText: string, category: string }[]> {
+    const result = await pool.query(
+      `SELECT id, rule_text, category FROM learned_rules WHERE active = true ORDER BY created_at ASC`
+    );
+    return result.rows.map((r: any) => ({ id: r.id, ruleText: r.rule_text, category: r.category }));
+  }
+
+  async deactivateLearnedRule(id: number): Promise<void> {
+    await pool.query(
+      `UPDATE learned_rules SET active = false WHERE id = $1`,
+      [id]
+    );
+  }
+
+  // ── Customer memory ──────────────────────────────────────────────────────────
+  async upsertCustomerMemory(phone: string, data: Partial<{name:string, email:string, company:string, deliveryAddress:string, typicalBarSizes:string, typicalProducts:string, lastOrderSummary:string, orderCount:number, totalSpent:number, avgOrderValue:number, largestOrderValue:number, mostOrderedProduct:string, customerType:string, notes:string}>): Promise<void> {
+    const setClauses: string[] = ['updated_at = NOW()'];
+    const values: any[] = [phone];
+    let paramIndex = 2;
+
+    const fieldMap: Record<string, string> = {
+      name: 'name',
+      email: 'email',
+      company: 'company',
+      deliveryAddress: 'delivery_address',
+      typicalBarSizes: 'typical_bar_sizes',
+      typicalProducts: 'typical_products',
+      lastOrderSummary: 'last_order_summary',
+      orderCount: 'order_count',
+      totalSpent: 'total_spent',
+      avgOrderValue: 'avg_order_value',
+      largestOrderValue: 'largest_order_value',
+      mostOrderedProduct: 'most_ordered_product',
+      customerType: 'customer_type',
+      notes: 'notes',
+    };
+
+    for (const [jsKey, dbCol] of Object.entries(fieldMap)) {
+      if (data[jsKey as keyof typeof data] !== undefined) {
+        setClauses.push(`${dbCol} = $${paramIndex}`);
+        values.push(data[jsKey as keyof typeof data]);
+        paramIndex++;
+      }
+    }
+
+    await pool.query(
+      `INSERT INTO customer_memory (phone) VALUES ($1)
+       ON CONFLICT (phone) DO UPDATE SET ${setClauses.join(', ')}`,
+      values
+    );
+  }
+
+  async getCustomerMemory(phone: string): Promise<any | null> {
+    const result = await pool.query(
+      `SELECT * FROM customer_memory WHERE phone = $1`,
+      [phone]
+    );
+    if (result.rows.length === 0) return null;
+    const r = result.rows[0];
+    return {
+      id: r.id,
+      phone: r.phone,
+      name: r.name,
+      email: r.email,
+      company: r.company,
+      deliveryAddress: r.delivery_address,
+      typicalBarSizes: r.typical_bar_sizes,
+      typicalProducts: r.typical_products,
+      lastOrderSummary: r.last_order_summary,
+      orderCount: r.order_count,
+      totalSpent: r.total_spent,
+      avgOrderValue: r.avg_order_value,
+      largestOrderValue: r.largest_order_value,
+      mostOrderedProduct: r.most_ordered_product,
+      customerType: r.customer_type,
+      notes: r.notes,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    };
+  }
+
+  // Records a completed order and updates all order statistics atomically
+  async recordOrderCompletion(phone: string, orderTotal: number, orderSummary: string, lineItems: Array<{name: string, qty: number}>): Promise<void> {
+    // Determine most ordered product from this order's line items (highest qty, filter out delivery/tax lines)
+    const productItems = lineItems.filter(i =>
+      i.name &&
+      !i.name.toLowerCase().includes('delivery') &&
+      !i.name.toLowerCase().includes('tax')
+    );
+    const topItem = productItems.sort((a, b) => b.qty - a.qty)[0];
+    const mostOrderedProduct = topItem?.name || null;
+
+    // Upsert the record first if it doesn't exist, then atomically update stats
+    await pool.query(
+      `INSERT INTO customer_memory (phone) VALUES ($1) ON CONFLICT (phone) DO NOTHING`,
+      [phone]
+    );
+
+    // Atomic update: recalculate running stats from current values
+    await pool.query(
+      `UPDATE customer_memory SET
+        order_count = order_count + 1,
+        total_spent = total_spent + $2,
+        avg_order_value = (total_spent + $2) / (order_count + 1),
+        largest_order_value = GREATEST(largest_order_value, $2),
+        last_order_summary = $3,
+        most_ordered_product = COALESCE($4, most_ordered_product),
+        updated_at = NOW()
+       WHERE phone = $1`,
+      [phone, orderTotal, orderSummary, mostOrderedProduct]
     );
   }
 }

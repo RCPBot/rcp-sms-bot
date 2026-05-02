@@ -831,12 +831,30 @@ export async function processMessage(
   inboundText: string,
   mediaUrls: string[] = [],
   orderHistory?: string,
-  justAutoVerified: boolean = false
+  justAutoVerified: boolean = false,
+  customerMemory?: any | null
 ): Promise<AIIntent> {
   const products = await storage.getAllProducts();
   const history = await storage.getMessages(conversation.id);
 
   let systemPrompt = buildSystemPrompt(products, conversation);
+
+  // Inject returning customer memory if available
+  if (customerMemory) {
+    const avgVal = customerMemory.avgOrderValue ? `$${(customerMemory.avgOrderValue as number).toFixed(2)}` : 'N/A';
+    const largestVal = customerMemory.largestOrderValue ? `$${(customerMemory.largestOrderValue as number).toFixed(2)}` : 'N/A';
+    systemPrompt += `\n\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\nRETURNING CUSTOMER MEMORY\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\nName: ${customerMemory.name || 'unknown'}\nCompany: ${customerMemory.company || 'N/A'}\nCustomer type: ${customerMemory.customerType || 'unknown'}\nOrders placed: ${customerMemory.orderCount || 0}\nTotal spent: $${(customerMemory.totalSpent || 0).toFixed(2)}\nAvg order value: ${avgVal}\nLargest order: ${largestVal}\nLast order: ${customerMemory.lastOrderSummary || 'none on record'}\nTypical products: ${customerMemory.typicalProducts || 'N/A'}\nMost ordered: ${customerMemory.mostOrderedProduct || 'N/A'}\nNotes: ${customerMemory.notes || 'none'}\n\nGreet them by name. Skip re-collecting info already on file. Reference their history naturally if relevant.`;
+  }
+
+  // Inject learned rules if any exist
+  try {
+    const learnedRules = await storage.getLearnedRules();
+    if (learnedRules.length > 0) {
+      systemPrompt += `\n\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\nLEARNED RULES (approved by Brian \u2014 follow exactly)\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n${learnedRules.map(r => r.ruleText).join('\n')}`;
+    }
+  } catch (err) {
+    console.warn('[AI] Failed to fetch learned rules:', err);
+  }
 
   // Inject server-computed price lookup so AI never has to do the math itself
   const priceLookup = computePriceLookup(inboundText, products);
@@ -1077,4 +1095,118 @@ Return JSON:
 
 export function isAiConfigured(): boolean {
   return !!process.env.OPENAI_API_KEY;
+}
+
+// ── Auto-flag conversation quality check ───────────────────────────────────────────
+export async function checkAndFlagConversation(
+  conversationId: number,
+  customerMessage: string,
+  botResponse: string
+): Promise<void> {
+  try {
+    const client = getClient();
+    const res = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: `You are a conversation quality classifier for a concrete/rebar supply company chatbot.
+Analyze the customer message and bot response. Return JSON only:
+{
+  "should_flag": true/false,
+  "reason": "customer_correction" | "bot_claimed_wrong" | "unanswered_question" | "none",
+  "detail": "brief description of what triggered the flag, or empty string",
+  "quoted_amount": number | null
+}
+
+Flag if ANY of these are true:
+1. Customer says the bot is wrong, made an error, or gave incorrect info
+2. Customer is correcting the bot's price, calculation, or product info
+3. Bot said it doesn't know something or told customer to call for basic product/price info it should know
+4. Customer expresses clear frustration implying bot failure
+Do NOT flag normal conversation, clarifying questions, or successful transactions.
+
+For quoted_amount: if the bot response contains a dollar total (e.g. "Total: $1,234.56" or "$2,847.00"), extract that number as a float. Otherwise return null.`,
+        },
+        {
+          role: "user",
+          content: `Customer message: ${customerMessage}\n\nBot response: ${botResponse}`,
+        },
+      ],
+      response_format: { type: "json_object" },
+      max_tokens: 200,
+    });
+
+    const parsed = JSON.parse(res.choices[0].message.content || "{}");
+    if (parsed.should_flag && parsed.reason && parsed.reason !== "none") {
+      await storage.flagConversation({
+        conversationId,
+        source: "sms",
+        flagReason: parsed.reason,
+        flagDetail: parsed.detail || "",
+        customerMessage,
+        botResponse,
+        quotedAmount: typeof parsed.quoted_amount === 'number' ? parsed.quoted_amount : undefined,
+        conversion: 'unknown',
+      });
+      console.log(`[AutoFlag] Flagged conversation ${conversationId}: ${parsed.reason} — ${parsed.detail}`);
+    }
+  } catch (err: any) {
+    console.warn(`[AutoFlag] Classification error for conversation ${conversationId}: ${err?.message}`);
+  }
+}
+
+// ── Detect abandoned mid-quote ────────────────────────────────────────────────────
+export async function checkAbandonedMidQuote(
+  conversationId: number,
+  phone: string,
+  lastBotMessage: string
+): Promise<void> {
+  // Only check if the last bot message looks like a price quote
+  const PRICE_PATTERN = /\$[\d,]+\.\d{2}/;
+  const QUOTE_INDICATORS = /total|subtotal|invoice|quote|price|estimate/i;
+  if (!PRICE_PATTERN.test(lastBotMessage) || !QUOTE_INDICATORS.test(lastBotMessage)) return;
+
+  try {
+    // Extract the quoted amount from the last bot message
+    const amountMatch = lastBotMessage.match(/\$([\d,]+\.\d{2})/);
+    const quotedAmount = amountMatch ? parseFloat(amountMatch[1].replace(/,/g, '')) : undefined;
+
+    await storage.flagConversation({
+      conversationId,
+      source: 'sms',
+      flagReason: 'abandoned_mid_quote',
+      flagDetail: `Customer went silent after price quote of ${quotedAmount ? '$' + quotedAmount.toFixed(2) : 'unknown amount'}. May indicate price resistance.`,
+      customerMessage: '(customer went silent)',
+      botResponse: lastBotMessage,
+      quotedAmount,
+      conversion: 'abandoned',
+    });
+    console.log(`[AutoFlag] Marked conversation ${conversationId} as abandoned mid-quote (quoted: ${quotedAmount ?? 'unknown'})`);
+  } catch (err: any) {
+    console.warn(`[AutoFlag] Abandon check error for conversation ${conversationId}: ${err?.message}`);
+  }
+}
+
+// ── Infer customer type from conversation messages ───────────────────────────
+export async function inferCustomerType(
+  messages: { direction: string; body: string }[]
+): Promise<'contractor' | 'homeowner' | 'developer' | 'unknown'> {
+  // Simple keyword-based heuristic — fast, no AI call needed
+  const inboundText = messages
+    .filter(m => m.direction === 'inbound')
+    .map(m => m.body.toLowerCase())
+    .join(' ');
+
+  // Contractor signals
+  const contractorPatterns = /\b(crew|job site|jobsite|my guys|superintendent|sub|contractor|concrete contractor|pour|multiple (slabs|jobs|pours|sites)|commercial|apartment|warehouse|foundation|footing|tilt.?wall|slab on grade|spec|bid|project manager|pm\b|general contractor|gc\b)\b/i;
+  // Developer signals
+  const developerPatterns = /\b(development|developer|units|lots|subdivision|phase (1|2|3|one|two|three)|building\s+\d|multiple buildings|master plan|infrastructure)\b/i;
+  // Homeowner signals
+  const homeownerPatterns = /\b(my (driveway|patio|backyard|garage|pool deck|front yard|sidewalk|walkway|home|house)|diy|do it myself|homeowner|residential address|my property|our house|my place)\b/i;
+
+  if (developerPatterns.test(inboundText)) return 'developer';
+  if (contractorPatterns.test(inboundText)) return 'contractor';
+  if (homeownerPatterns.test(inboundText)) return 'homeowner';
+  return 'unknown';
 }
