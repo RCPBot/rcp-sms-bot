@@ -4061,7 +4061,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
     }
   });
 
-  // ── Employee AI Dashboard — proxy endpoints (CORS open for static dashboard) ─
+  // ── Employee AI Dashboard — proxy endpoints (CORS open for static dashboard) v2 ─
   const RCP_EMPLOYEE_SYSTEM = `You are an AI assistant for Rebar Concrete Products (RCP) employees. Deep expertise in RCP products, pricing, and best practices.
 
 STOCK REBAR (default to 20' always):

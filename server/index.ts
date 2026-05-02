@@ -17,6 +17,14 @@ const ALLOWED_ORIGINS = [
 ];
 app.use((req, res, next) => {
   const origin = req.headers.origin as string;
+  // Employee dashboard routes — open CORS for any origin
+  if (req.path.startsWith('/api/employee/')) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    return next();
+  }
   if (ALLOWED_ORIGINS.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
   }
