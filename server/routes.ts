@@ -1357,6 +1357,15 @@ export function registerRoutes(httpServer: Server, app: Express) {
       const CONCRETE_QBO_IDS = new Set(["34", "32", "33", "40", "35", "36", "31"]);
       const SHORT_LOAD_QBO_ID = "37";   // Short Load Fee - Concrete ($350)
       const CONCRETE_DELIVERY_QBO_ID = "38"; // Concrete Truck Delivery ($70)
+      const CONCRETE_FEE_IDS = new Set([SHORT_LOAD_QBO_ID, CONCRETE_DELIVERY_QBO_ID]);
+
+      // GUARD: Purge any concrete fee items the AI injected if no real concrete products are present
+      const hasRealConcrete = validItems.some((i: any) => CONCRETE_QBO_IDS.has(String(i.qboItemId)));
+      if (!hasRealConcrete) {
+        const before = validItems.length;
+        validItems.splice(0, validItems.length, ...validItems.filter((i: any) => !CONCRETE_FEE_IDS.has(String(i.qboItemId))));
+        if (validItems.length !== before) console.log(`[Order] Purged ${before - validItems.length} concrete fee item(s) — no concrete products on order`);
+      }
 
       const concreteItems = validItems.filter((i: any) => CONCRETE_QBO_IDS.has(String(i.qboItemId)));
       const totalConcreteYards = concreteItems.reduce((sum: number, i: any) => sum + i.qty, 0);
@@ -2549,7 +2558,21 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       const WEB_CONCRETE_QBO_IDS = new Set(["34", "32", "33", "40", "35", "36", "31"]);
       const WEB_CONCRETE_FEE_IDS = new Set(["37", "38"]); // Short Load Fee, Concrete Truck Delivery
 
-      // Inject concrete fees into lineItems if not already present
+      // GUARD: Strip any concrete fee items (37, 38) the AI may have injected
+      // if there are no actual concrete PSI products on the order.
+      // Concrete truck delivery and short load fees are ONLY valid when
+      // concrete (3000–4500 PSI, QBO IDs 31–36, 40) is present.
+      const hasRealConcreteProducts = lineItems.some(i => WEB_CONCRETE_QBO_IDS.has(String(i.qboItemId)));
+      if (!hasRealConcreteProducts) {
+        const purged = lineItems.filter(i => !WEB_CONCRETE_FEE_IDS.has(String(i.qboItemId)));
+        if (purged.length !== lineItems.length) {
+          console.log(`[WEB-ORDER] Purged ${lineItems.length - purged.length} concrete fee item(s) — no concrete products on order`);
+          lineItems.length = 0;
+          purged.forEach(i => lineItems.push(i));
+        }
+      }
+
+      // Inject concrete fees into lineItems only when concrete products are present
       const webConcreteItems = lineItems.filter(i => WEB_CONCRETE_QBO_IDS.has(String(i.qboItemId)));
       const webTotalConcreteYards = webConcreteItems.reduce((sum, i) => sum + i.qty, 0);
       const webHasShortLoadFee = lineItems.some(i => String(i.qboItemId) === "37");
