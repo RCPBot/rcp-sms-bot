@@ -2484,7 +2484,16 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
         try {
           const estCustomerId = await getOrCreateEstCustomer();
           const products2 = await getQboItems();
-          const estLineItems = items.map((item: any) => {
+          // Concrete fee IDs (37=Short Load, 38=Concrete Truck Delivery) must NEVER
+          // appear on a non-concrete order. Purge them before building EST estimate.
+          const EST_CONCRETE_FEE_IDS = new Set(["37", "38"]);
+          const EST_CONCRETE_QBO_IDS = new Set(["34", "32", "33", "40", "35", "36", "31"]);
+          const hasConcreteProducts = items.some((i: any) => EST_CONCRETE_QBO_IDS.has(String(i.qboItemId)));
+          const filteredItems = hasConcreteProducts
+            ? items
+            : items.filter((i: any) => !EST_CONCRETE_FEE_IDS.has(String(i.qboItemId)));
+
+          const estLineItems = filteredItems.map((item: any) => {
             const product = item.qboItemId
               ? products2.find((p: any) => String(p.id) === String(item.qboItemId))
               : products2.find((p: any) => p.name?.toLowerCase() === item.name?.toLowerCase());
