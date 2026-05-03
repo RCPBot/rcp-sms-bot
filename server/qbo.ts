@@ -424,14 +424,22 @@ export async function findExistingCustomer(params: {
       }
     }
 
-    // ── Pass 2: name-only fuzzy match (no phone on file) ────────────────────
+    // ── Pass 2: name+email match ONLY when customer has NO phone on file ────
+    // If QBO has a phone on file for this customer, phone verification is
+    // required — name+email alone is NOT sufficient (prevents wrong-number orders).
     for (const c of customers) {
       const qboName = c.DisplayName || c.FullyQualifiedName || "";
       if (!nameMatches(params.name, qboName)) continue;
-      // Require at least the email to match if no phone
+      // Skip if this customer has a phone on file — they should have matched in Pass 1
+      const qboPhone = normalizePhone(c.PrimaryPhone?.FreeFormNumber || c.Mobile?.FreeFormNumber || "");
+      if (qboPhone.length >= 7) {
+        console.log(`[QBO] findExistingCustomer: name match "${qboName}" skipped — has phone on file but phone didn't match input "${inputPhone}"`);
+        continue;
+      }
+      // No phone on file — require email match as the fallback identifier
       const qboEmail = (c.PrimaryEmailAddr?.Address || "").toLowerCase();
       if (params.email && qboEmail && qboEmail === params.email.toLowerCase()) {
-        console.log(`[QBO] findExistingCustomer: fuzzyName+email match → "${qboName}"`);
+        console.log(`[QBO] findExistingCustomer: fuzzyName+email match (no phone on file) → "${qboName}"`);
         return c.Id;
       }
     }
