@@ -2808,13 +2808,15 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       const label = usingEstCustomer ? `${customerName || "anonymous"} (EST customer)` : customerName;
       console.log(`[WEB-ESTIMATE] Estimate #${est.estimateNumber} created for ${label} via web chat — $${total}`);
 
+      // Return a direct PDF link so the widget can show a "View Estimate" button.
+      // /api/estimate-pdf/:id is a public endpoint (no QBO login required).
+      const estimatePdfLink = `https://rcp-sms-bot-production.up.railway.app/api/estimate-pdf/${est.estimateId}`;
+
       res.json({
         success: true,
         estimateNumber: est.estimateNumber,
         estimateId: est.estimateId,
-        // Never return the QBO app link — it requires customer login.
-        // PDF is attached to the email instead. Widget should not show a link button.
-        estimateLink: null,
+        estimateLink: estimatePdfLink,
         pdfAttached: !!estimatePdf,
         subtotal,
         tax,
@@ -3064,7 +3066,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       const wrap = document.createElement('div'); wrap.className = 'msg bot';
       const bubble = document.createElement('div'); bubble.className = 'bubble';
       const emailNote = email ? '<div style="margin-top:8px;font-size:13px;opacity:0.85;">A copy has been emailed to ' + email + '.</div>' : '<div style="margin-top:8px;font-size:13px;opacity:0.85;">Check your email for a copy of the estimate.</div>';
-      const linkHtml = estimateLink ? '<div style="margin-top:10px;"><a href="' + estimateLink + '" target="_blank" rel="noopener" style="display:inline-block;background:#C8D400;color:#16161d;font-weight:700;padding:10px 20px;border-radius:20px;text-decoration:none;font-size:14px;">View Estimate →</a></div>' : '';
+      const linkHtml = estimateLink ? '<div style="margin-top:10px;"><a href="' + estimateLink + '" target="_blank" rel="noopener" style="display:inline-block;background:#C8D400;color:#16161d;font-weight:700;padding:10px 20px;border-radius:20px;text-decoration:none;font-size:14px;">📄 Download Estimate PDF</a></div>' : '';
       bubble.innerHTML =
         '<div style="margin-bottom:8px;font-weight:600;">Estimate #' + estimateNumber + ' is ready!</div>' +
         '<div style="font-size:13px;opacity:0.85;">Total: $' + Number(total).toFixed(2) + ' (includes 8.25% tax)</div>' +
@@ -3781,7 +3783,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       const wrap = document.createElement('div'); wrap.className = 'msg bot';
       const bubble = document.createElement('div'); bubble.className = 'bubble';
       const emailNote = email ? '<div style="margin-top:8px;font-size:13px;opacity:0.85;">A copy has been emailed to ' + email + '.</div>' : '<div style="margin-top:8px;font-size:13px;opacity:0.85;">Check your email for a copy of the estimate.</div>';
-      const linkHtml = estimateLink ? '<div style="margin-top:10px;"><a href="' + estimateLink + '" target="_blank" rel="noopener" style="display:inline-block;background:#C8D400;color:#16161d;font-weight:700;padding:10px 20px;border-radius:20px;text-decoration:none;font-size:14px;">View Estimate →</a></div>' : '';
+      const linkHtml = estimateLink ? '<div style="margin-top:10px;"><a href="' + estimateLink + '" target="_blank" rel="noopener" style="display:inline-block;background:#C8D400;color:#16161d;font-weight:700;padding:10px 20px;border-radius:20px;text-decoration:none;font-size:14px;">📄 Download Estimate PDF</a></div>' : '';
       bubble.innerHTML =
         '<div style="margin-bottom:8px;font-weight:600;">Estimate #' + estimateNumber + ' is ready!</div>' +
         '<div style="font-size:13px;opacity:0.85;">Total: $' + Number(total).toFixed(2) + ' (includes 8.25% tax)</div>' +
