@@ -3259,21 +3259,36 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
           const alreadyVerified = verifiedWebPhones.get(e164) && (Date.now() - verifiedWebPhones.get(e164)!) <= 10 * 60 * 1000;
 
           if (!submittedCode && !alreadyVerified) {
-            // No code yet — send verification code and ask widget to collect it
-            const code = generateCode();
-            pendingVerifications.set(e164, { code, expiresAt: Date.now() + 5 * 60 * 1000, payload: orderPayload, attempts: 0 });
-            try { await sendVerificationCode(e164, code); } catch (smsErr) {
-              console.error("[chat-proxy] Failed to send verification SMS:", smsErr);
+            // Only enforce SMS verification if Twilio is fully operational
+            if (isTwilioConfigured()) {
+              const code = generateCode();
+              pendingVerifications.set(e164, { code, expiresAt: Date.now() + 5 * 60 * 1000, payload: orderPayload, attempts: 0 });
+              let smsSent = false;
+              try {
+                await sendVerificationCode(e164, code);
+                smsSent = true;
+              } catch (smsErr) {
+                console.warn("[chat-proxy] Twilio SMS failed — bypassing verification gate:", smsErr);
+                pendingVerifications.delete(e164);
+              }
+              if (smsSent) {
+                console.log(`[chat-proxy] Verification code sent to ${e164} — awaiting customer reply`);
+                const verifyPrompt = "To confirm your order, please enter the 6-digit verification code we just texted to your phone.";
+                if (data.reply !== undefined)   data.reply   = verifyPrompt;
+                if (data.message !== undefined) data.message = verifyPrompt;
+                if (data.content !== undefined) data.content = verifyPrompt;
+                if (data.text !== undefined)    data.text    = verifyPrompt;
+                data.verificationRequired = true;
+                res.json(data);
+                return;
+              }
+              // SMS failed — fall through and create invoice directly
+              console.log(`[chat-proxy] SMS unavailable — creating invoice without verification for ${e164}`);
+            } else {
+              console.log(`[chat-proxy] Twilio not configured — skipping verification for ${e164}`);
             }
-            console.log(`[chat-proxy] Verification code sent to ${e164} — awaiting customer reply`);
-            const verifyPrompt = "To confirm your order, please enter the 6-digit verification code we just texted to your phone.";
-            if (data.reply !== undefined)   data.reply   = verifyPrompt;
-            if (data.message !== undefined) data.message = verifyPrompt;
-            if (data.content !== undefined) data.content = verifyPrompt;
-            if (data.text !== undefined)    data.text    = verifyPrompt;
-            data.verificationRequired = true;
-            res.json(data);
-            return;
+            // Mark as verified so subsequent requests skip the gate
+            verifiedWebPhones.set(e164, Date.now());
           }
 
           if (submittedCode && !alreadyVerified) {
