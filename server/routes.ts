@@ -2441,20 +2441,25 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       }
 
       // ── Verification gate ─────────────────────────────────────────────────
-      // /api/confirm-verification must have been called successfully for this phone
-      // within the last 10 minutes before /api/web-order is accepted.
+      // Trusted internal callers (Shopify widget, EstimatingBot) pass x-rcp-internal header
+      // to bypass the phone verification gate — they already confirmed intent via AI chat.
+      const internalHeader = req.headers["x-rcp-internal"];
+      const isTrustedCaller = internalHeader === "rcp-shopify-2024";
+
       const rawPhone = verifiedPhone || customerPhone || "";
       const phoneDigits = rawPhone.replace(/\D/g, "");
       const e164Phone = phoneDigits.length === 10 ? `+1${phoneDigits}` : `+${phoneDigits}`;
       const grantedAt = verifiedWebPhones.get(e164Phone);
-      if (!grantedAt || Date.now() - grantedAt > 10 * 60 * 1000) {
+      const alreadyVerified = grantedAt && Date.now() - grantedAt <= 10 * 60 * 1000;
+
+      if (!isTrustedCaller && !alreadyVerified) {
         return res.status(403).json({
           error: "verification_required",
           message: "Order verification required. Please enter the code sent to your phone.",
         });
       }
-      verifiedWebPhones.delete(e164Phone); // one-time use
-      console.log(`[Verify] Web-order authorized for ${e164Phone}`);
+      if (alreadyVerified) verifiedWebPhones.delete(e164Phone); // one-time use
+      console.log(`[Verify] Web-order authorized for ${e164Phone} (${isTrustedCaller ? "trusted caller" : "verified phone"})`);
       // ─────────────────────────────────────────────────────────────────────────────
 
       // Look up existing QBO customer by name + phone — no new customers created via web (fraud prevention)
