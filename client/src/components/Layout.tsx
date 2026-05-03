@@ -1,5 +1,5 @@
 import { useLocation } from "wouter";
-import { MessageSquare, ShoppingCart, Package, Settings, Zap, History } from "lucide-react";
+import { MessageSquare, ShoppingCart, Package, Settings, History } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 
@@ -29,13 +29,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         {/* Logo */}
         <div className="p-4 border-b border-border">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-primary rounded flex items-center justify-center">
-              <Zap className="w-4 h-4 text-primary-foreground" />
-            </div>
-            <div>
-              <div className="text-sm font-bold text-foreground leading-none">RCP TextBot</div>
-              <div className="text-xs text-muted-foreground mt-0.5">Order Automation</div>
-            </div>
+            <img
+              src="https://ai.rebarconcreteproducts.com/corebuild_ai_logo.png"
+              alt="CoreBuild AI"
+              className="h-8 w-auto object-contain"
+            />
           </div>
         </div>
 

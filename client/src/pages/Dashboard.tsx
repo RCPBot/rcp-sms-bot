@@ -839,9 +839,16 @@ export default function Dashboard() {
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-xl font-bold text-foreground">AI Channel</h1>
-        <p className="text-sm text-muted-foreground mt-1">Rebar Concrete Products — SMS &amp; Web Chat Management</p>
+      <div className="flex items-center gap-4">
+        <img
+          src="https://ai.rebarconcreteproducts.com/corebuild_ai_logo.png"
+          alt="CoreBuild AI"
+          className="h-8 w-auto object-contain"
+        />
+        <div>
+          <h1 className="text-xl font-bold text-foreground">AI Channel Dashboard</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">Rebar Concrete Products — SMS &amp; Web Chat Management</p>
+        </div>
       </div>
 
       {/* Tabs */}
