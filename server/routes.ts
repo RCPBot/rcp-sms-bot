@@ -3312,13 +3312,31 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
     res.send(html);
   });
 
-  // ── /api/chat-proxy — forward chat requests to ai.rebarconcreteproducts.com ──
+  // ── /api/chat-proxy — forward chat requests to CoreBuild platform (or legacy EstimatingBot) ──
+  // MIGRATION (2026-05-03): Routable to CoreBuild AI platform via COREBUILD_MODE=true env var.
+  // REVERT: set COREBUILD_MODE=false (or unset) to go back to EstimatingBot.
   // Used by the /chat-widget iframe so the fetch stays same-origin (Railway)
   // which already has CORS configured for the Shopify storefront.
   // Also strips internal control tags ([CONFIRM_ORDER], etc.) so they never
   // reach the customer's screen, and optionally triggers SMS payment links.
   app.post("/api/chat-proxy", express.json(), async (req, res) => {
     try {
+      // ── CoreBuild mode: forward directly to CoreBuild platform and return response ───────
+      // When COREBUILD_MODE=true, the CoreBuild platform handles ALL AI processing,
+      // tag parsing, order confirmation, verification, and QBO invoice/estimate creation.
+      // This bypasses the legacy EstimatingBot + full tag-parsing code below.
+      if (process.env.COREBUILD_MODE === "true") {
+        const cbUrl = process.env.COREBUILD_CHAT_PROXY_URL ?? "https://corebuild-platform-production.up.railway.app/api/chat-proxy";
+        const cbResp = await fetch(cbUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(req.body),
+        });
+        const cbData = await cbResp.json();
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        return res.json(cbData);
+      }
+      // ── Legacy mode: forward to EstimatingBot + parse tags locally ────────────────────
       const upstream = await fetch("https://ai.rebarconcreteproducts.com/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
