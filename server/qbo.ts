@@ -393,56 +393,47 @@ export async function findExistingCustomer(params: {
     const data = await qboGet(`/query?query=${encoded}`);
     const customers: any[] = data.QueryResponse?.Customer || [];
 
-    // ── Pass 1: phone match + fuzzy name ────────────────────────────────────
-    if (inputPhone.length >= 7) {
-      for (const c of customers) {
-        const qboPhone = normalizePhone(c.PrimaryPhone?.FreeFormNumber || c.Mobile?.FreeFormNumber || "");
-        if (!qboPhone) continue;
-        const phoneMatch = qboPhone.slice(-10) === inputPhone.slice(-10);
-        if (!phoneMatch) continue;
-        // Phone matched — accept even if name has a small typo
-        const qboName = c.DisplayName || c.FullyQualifiedName || "";
-        if (nameMatches(params.name, qboName)) {
-          console.log(`[QBO] findExistingCustomer: phone+fuzzyName match → "${qboName}" for input "${params.name}"`);
-          if (params.email && !c.PrimaryEmailAddr?.Address) {
-            try {
-              await qboPost("/customer", {
-                Id: c.Id, SyncToken: c.SyncToken, sparse: true,
-                PrimaryEmailAddr: { Address: params.email },
-              });
-            } catch (_) {}
-          }
-          return c.Id;
-        }
-        // Phone matched but name is very different — still allow if within 3 edits
-        // (covers cases where customer used their company name vs personal name)
-        const dist = levenshtein(normName(params.name), normName(qboName));
-        if (dist <= 3) {
-          console.log(`[QBO] findExistingCustomer: phone match + loose name (dist=${dist}) → "${qboName}" for input "${params.name}"`);
-          return c.Id;
-        }
-      }
+    // ── Phone is the primary and required identifier ────────────────────────
+    // A matching phone number on file in QBO is ALWAYS required.
+    // Without a phone match, no invoice can be created — this ensures that
+    // when Twilio 2FA is active, the verification code goes to the number
+    // on the QBO account, not a number the customer typed.
+    if (inputPhone.length < 7) {
+      console.log(`[QBO] findExistingCustomer: input phone too short — blocked`);
+      return null;
     }
 
-    // ── Pass 2: name+email match ONLY when customer has NO phone on file ────
-    // If QBO has a phone on file for this customer, phone verification is
-    // required — name+email alone is NOT sufficient (prevents wrong-number orders).
     for (const c of customers) {
-      const qboName = c.DisplayName || c.FullyQualifiedName || "";
-      if (!nameMatches(params.name, qboName)) continue;
-      // Skip if this customer has a phone on file — they should have matched in Pass 1
       const qboPhone = normalizePhone(c.PrimaryPhone?.FreeFormNumber || c.Mobile?.FreeFormNumber || "");
-      if (qboPhone.length >= 7) {
-        console.log(`[QBO] findExistingCustomer: name match "${qboName}" skipped — has phone on file but phone didn't match input "${inputPhone}"`);
-        continue;
-      }
-      // No phone on file — require email match as the fallback identifier
-      const qboEmail = (c.PrimaryEmailAddr?.Address || "").toLowerCase();
-      if (params.email && qboEmail && qboEmail === params.email.toLowerCase()) {
-        console.log(`[QBO] findExistingCustomer: fuzzyName+email match (no phone on file) → "${qboName}"`);
+      if (!qboPhone || qboPhone.length < 7) continue;
+      // Phone must match (last 10 digits)
+      if (qboPhone.slice(-10) !== inputPhone.slice(-10)) continue;
+
+      // Phone matched — now verify name as secondary confirmation
+      const qboName = c.DisplayName || c.FullyQualifiedName || "";
+      if (nameMatches(params.name, qboName)) {
+        console.log(`[QBO] findExistingCustomer: phone+name match → "${qboName}" for input "${params.name}"`);
+        // Backfill email if not on file
+        if (params.email && !c.PrimaryEmailAddr?.Address) {
+          try {
+            await qboPost("/customer", {
+              Id: c.Id, SyncToken: c.SyncToken, sparse: true,
+              PrimaryEmailAddr: { Address: params.email },
+            });
+          } catch (_) {}
+        }
         return c.Id;
       }
+
+      // Phone matched but name doesn't match — hard block.
+      // Do NOT allow a matching phone with a mismatched name — could be
+      // a different person at the same company sharing a number.
+      console.log(`[QBO] findExistingCustomer: phone matched "${qboName}" but name "${params.name}" didn't match — blocked`);
+      return null;
     }
+
+    // No phone match found at all
+    console.log(`[QBO] findExistingCustomer: no QBO customer with phone ${inputPhone} — blocked`);
   } catch (err: any) {
     console.error(`[QBO] findExistingCustomer failed:`, err?.message);
   }
