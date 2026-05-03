@@ -3740,6 +3740,8 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
     let history = [];
     let busy = false;
     let customerName = '', customerEmail = '', customerPhone = '';
+    let verificationPending = false;
+    let pendingOrderPayload = null;
 
     function scrollBottom() { messagesEl.scrollTop = messagesEl.scrollHeight; }
 
@@ -3805,7 +3807,11 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
         const resp = await fetch(API, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messages: history, imageBase64: null, imageMediaType: null, customerName, customerEmail, customerPhone })
+          body: JSON.stringify(
+            verificationPending
+              ? { messages: history, imageBase64: null, imageMediaType: null, customerName, customerEmail, customerPhone, verificationCode: text, ...(pendingOrderPayload || {}) }
+              : { messages: history, imageBase64: null, imageMediaType: null, customerName, customerEmail, customerPhone }
+          )
         });
         removeTyping();
 
@@ -3813,19 +3819,30 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
           addBubble('bot', 'Sorry, something went wrong (' + resp.status + '). Please try again.');
         } else {
           const data = await resp.json();
-          const reply = (data.reply || data.message || data.content || data.text) || 'No response received.';
-          addBubble('bot', reply);
-          history.push({ role: 'assistant', content: reply });
 
-          if (data.paymentLink && data.invoiceNumber) {
-            addPaymentButton(data.paymentLink, data.invoiceNumber, data.total);
-          }
-
-          if (data.confirmEstimateTriggered && data.estimateNumber) {
-            addEstimateConfirmation(data.estimateNumber, data.total, data.estimateLink, customerEmail);
-          }
           if (data.verificationRequired) {
-            addBubble('bot', 'Please enter the 6-digit code we just texted to your phone to confirm your order.');
+            verificationPending = true;
+            pendingOrderPayload = { customerName, customerEmail, customerPhone };
+            inputEl.placeholder = 'Enter 6-digit code…';
+            addBubble('bot', 'To confirm your order, please enter the 6-digit verification code we just texted to your phone.');
+          } else if (data.verificationFailed) {
+            const reply = (data.reply || data.message || data.content || data.text) || 'Incorrect code. Please try again.';
+            addBubble('bot', reply);
+            history.push({ role: 'assistant', content: reply });
+          } else {
+            verificationPending = false;
+            pendingOrderPayload = null;
+            inputEl.placeholder = 'Ask about pricing, orders, invoices…';
+            const reply = (data.reply || data.message || data.content || data.text) || 'No response received.';
+            addBubble('bot', reply);
+            history.push({ role: 'assistant', content: reply });
+
+            if (data.paymentLink && data.invoiceNumber) {
+              addPaymentButton(data.paymentLink, data.invoiceNumber, data.total);
+            }
+            if (data.confirmEstimateTriggered && data.estimateNumber) {
+              addEstimateConfirmation(data.estimateNumber, data.total, data.estimateLink, customerEmail);
+            }
           }
         }
       } catch (err) {
