@@ -2484,14 +2484,17 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
         try {
           const estCustomerId = await getOrCreateEstCustomer();
           const products2 = await getQboItems();
-          // Concrete fee IDs (37=Short Load, 38=Concrete Truck Delivery) must NEVER
-          // appear on a non-concrete order. Purge them before building EST estimate.
-          const EST_CONCRETE_FEE_IDS = new Set(["37", "38"]);
+          // IDs that must never be AI-injected — we handle fees ourselves
+          const EST_CONCRETE_FEE_IDS = new Set(["37", "38"]); // concrete-only fees
+          const EST_DELIVERY_FEE_ID = "1010000081"; // rebar delivery fee (injected by code below)
           const EST_CONCRETE_QBO_IDS = new Set(["34", "32", "33", "40", "35", "36", "31"]);
           const hasConcreteProducts = items.some((i: any) => EST_CONCRETE_QBO_IDS.has(String(i.qboItemId)));
-          const filteredItems = hasConcreteProducts
-            ? items
-            : items.filter((i: any) => !EST_CONCRETE_FEE_IDS.has(String(i.qboItemId)));
+          // Strip: concrete fees if no concrete, AND any AI-injected delivery fee (we recalculate)
+          const filteredItems = items.filter((i: any) => {
+            if (String(i.qboItemId) === EST_DELIVERY_FEE_ID) return false; // always recalc
+            if (EST_CONCRETE_FEE_IDS.has(String(i.qboItemId)) && !hasConcreteProducts) return false;
+            return true;
+          });
 
           const estLineItems = filteredItems.map((item: any) => {
             const product = item.qboItemId
@@ -2510,12 +2513,54 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
             };
           }).filter((i: any) => i.qboItemId !== "");
 
+          // ── Rebar delivery fee for EST estimate ──────────────────────────
+          // Only add delivery fee when a delivery address was provided and
+          // the order doesn't qualify for free delivery.
+          const EST_FREE_DELIVERY_TIERS = [
+            { miles: 65, minOrder: 8000 },
+            { miles: 55, minOrder: 4000 },
+            { miles: 40, minOrder: 2000 },
+            { miles: 30, minOrder: 1000 },
+          ];
+          if (deliveryAddress && deliveryAddress.trim()) {
+            try {
+              const estDist = await calcDeliveryFee(deliveryAddress);
+              if (estDist && estDist.fee > 0) {
+                const estSubtotal = estLineItems.reduce((s: number, l: any) => s + l.amount, 0);
+                const qualifiesFree = EST_FREE_DELIVERY_TIERS.some(
+                  t => estDist.miles <= t.miles && estSubtotal >= t.minOrder
+                );
+                if (!qualifiesFree) {
+                  const deliveryProduct = products2.find((p: any) => String(p.id) === EST_DELIVERY_FEE_ID);
+                  const deliveryUnitPrice = deliveryProduct ? deliveryProduct.unitPrice : estDist.fee;
+                  // Use actual calculated fee as the line amount regardless of catalog price
+                  estLineItems.push({
+                    qboItemId: EST_DELIVERY_FEE_ID,
+                    name: "Delivery Fee",
+                    description: `Delivery (${estDist.miles} mi)`,
+                    qty: 1,
+                    unitPrice: estDist.fee,
+                    amount: estDist.fee,
+                  });
+                  console.log(`[WEB-ORDER] EST estimate: added $${estDist.fee} delivery fee (${estDist.miles} mi)`);
+                } else {
+                  console.log(`[WEB-ORDER] EST estimate: delivery waived — qualifies for free delivery (${estDist.miles} mi, $${estLineItems.reduce((s: number, l: any) => s + l.amount, 0).toFixed(2)} subtotal)`);
+                }
+              }
+            } catch (distErr) {
+              console.warn("[WEB-ORDER] EST estimate: could not calculate delivery fee:", distErr);
+              // Non-fatal — proceed without delivery fee rather than blocking the estimate
+            }
+          }
+          // ────────────────────────────────────────────────────────────────
+
           const est = await createEstimate({
             customerId: estCustomerId,
             customerEmail: customerEmail || undefined,
             lineItems: estLineItems,
             shipToName: customerName,
             shipToPhone: customerPhone || undefined,
+            deliveryAddress: deliveryAddress || undefined,
             customerMemo: `Web estimate for ${customerName}${customerPhone ? ` (${customerPhone})` : ""}. No account on file — call 469-631-7730 to set up an account.`,
           });
 
