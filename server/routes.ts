@@ -4048,6 +4048,41 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
 
   // ── /api/admin/digest — trigger daily digest manually or via cron ──────────
   // On the 1st of every month, also fires the PO audit email automatically.
+  // ── /api/log-web-chat — receive conversation logs from EstimatingBot ──
+  app.post("/api/log-web-chat", express.json(), async (req, res) => {
+    try {
+      const { sessionId, customerName, customerEmail, customerPhone, messages: msgs, latestReply } = req.body || {};
+      if (!msgs || !Array.isArray(msgs)) return res.status(400).json({ error: "messages required" });
+      const phone = customerPhone
+        ? "web-" + String(customerPhone).replace(/\D/g, "")
+        : customerEmail
+          ? "web-" + String(customerEmail).replace(/[^a-z0-9]/gi, "").slice(0, 20)
+          : sessionId
+            ? String(sessionId).slice(0, 60)
+            : "web-anon-" + Date.now().toString(36).slice(-6);
+      const conv = await storage.getOrCreateConversation(phone);
+      const existingMsgs = await storage.getMessages(conv.id);
+      const alreadySaved = existingMsgs.length;
+      const msgsToSave = msgs.slice(alreadySaved);
+      for (const m of msgsToSave) {
+        if (!m.content?.trim()) continue;
+        const direction = m.role === "user" ? "inbound" : "outbound";
+        await storage.addMessage({ conversationId: conv.id, direction, body: m.content });
+      }
+      if (latestReply) {
+        await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: latestReply });
+      }
+      const updates: Record<string, any> = {};
+      if (customerName && !conv.customerName) updates.customerName = customerName;
+      if (customerEmail && !conv.customerEmail) updates.customerEmail = customerEmail;
+      if (Object.keys(updates).length > 0) await storage.updateConversation(conv.id, updates);
+      res.json({ ok: true });
+    } catch (err: any) {
+      console.error("[log-web-chat]", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.post("/api/admin/digest", async (_req, res) => {
     try {
       const result = await sendDailyDigest();
