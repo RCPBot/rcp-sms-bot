@@ -16,7 +16,14 @@ import * as os from "os";
 
 
 const OWNER_EMAIL = "maddoxconstruction1987@gmail.com";
-const TAX_RATE = 0.0825; // McKinney, TX: 8.25% combined sales tax
+const TAX_RATE = parseFloat(process.env.TAX_RATE || "0.0825");
+
+// ── Multi-tenant company config ──────────────────────────────────────────────
+// RCP values are the defaults. Override via env vars for new customers.
+const COMPANY_NAME    = process.env.COMPANY_NAME    || "Rebar Concrete Products";
+const COMPANY_PHONE   = process.env.COMPANY_PHONE   || "${COMPANY_PHONE}";
+const COMPANY_EMAIL   = process.env.COMPANY_EMAIL   || "Office@RebarConcreteProducts.com";
+const COMPANY_ADDRESS = process.env.COMPANY_ADDRESS || "2112 N Custer Rd, McKinney, TX 75071";
 
 const orderConfirmationInProgress = new Set<number>();
 
@@ -624,7 +631,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
     // If a link was sent but we couldn't open it, notify the customer right away
     if (linkResolveFailed && mediaUrls.length === 0 && pdfUrls.length === 0) {
-      const failMsg = `Sorry, we weren't able to open that link. Please try sending the file again, or call us at 469-631-7730 and we'll take care of it.`;
+      const failMsg = `Sorry, we weren't able to open that link. Please try sending the file again, or call us at ${COMPANY_PHONE} and we'll take care of it.`;
       try { await sendSms(cleanPhone, failMsg); } catch {}
       return;
     }
@@ -747,7 +754,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
       const CLOSE_KEYWORDS = /^(done|bye|goodbye|end|close|that'?s? all|no more|nothing else|we'?re? good|all good|thank you that'?s? all|thanks that'?s? all|that will (be )?all)[\.!]?$/i;
       if (CLOSE_KEYWORDS.test(cleanBody.trim())) {
         await storage.updateConversation(conv.id, { status: "completed" });
-        const closeMsg = `You're all set! Text us anytime if you need anything else. — Rebar Concrete Products (469) 631-7730`;
+        const closeMsg = `You're all set! Text us anytime if you need anything else. — ${COMPANY_NAME} ${COMPANY_PHONE}`;
         await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: closeMsg });
         try { await sendSms(cleanPhone, closeMsg); } catch {}
         // Check if conversation was abandoned mid-quote (closed without placing an order)
@@ -817,7 +824,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
           const dLine = deliveryFee > 0 ? `\nDelivery: $${deliveryFee.toFixed(2)}` : "";
           const payMsg = paymentLink
             ? `Great! Here is your payment link for Invoice #${invoiceNumber}:\n\n${paymentLink}\n\nSubtotal: $${subtotal.toFixed(2)}\nTax (8.25%): $${taxAmount.toFixed(2)}${dLine}\nTotal: $${total.toFixed(2)}\n\nWe'll also email the invoice to ${conv.customerEmail}. Thank you!`
-            : `Thank you for confirming! Invoice #${invoiceNumber} has been emailed to ${conv.customerEmail}. Total: $${total.toFixed(2)}. Call us at 469-631-7730 with any questions.`;
+            : `Thank you for confirming! Invoice #${invoiceNumber} has been emailed to ${conv.customerEmail}. Total: $${total.toFixed(2)}. Call us at ${COMPANY_PHONE} with any questions.`;
 
           await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: payMsg });
           let smsSent = false;
@@ -839,7 +846,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
         }
 
         if (CORRECTION.test(cleanBody.trim())) {
-          const corrMsg = `No problem! Please describe what needs to be corrected and we'll update the invoice for you. You can also call us at 469-631-7730.`;
+          const corrMsg = `No problem! Please describe what needs to be corrected and we'll update the invoice for you. You can also call us at ${COMPANY_PHONE}.`;
           await storage.updateConversation(conv.id, { stage: "ordering" });
           await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: corrMsg });
           try { await sendSms(cleanPhone, corrMsg); } catch {}
@@ -907,7 +914,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
         if (est && est.status !== "approved") {
           await handleEstimateApproval(est.id, conv.id, cleanPhone, est.qboEstimateNumber || "Estimate");
         } else {
-          const noEst = "No pending estimate found. Call us at 469-631-7730 if you have questions.";
+          const noEst = "No pending estimate found. Call us at ${COMPANY_PHONE} if you have questions.";
           await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: noEst });
           await sendSms(cleanPhone, noEst);
         }
@@ -1050,7 +1057,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
         );
       } else if (!replyText && intent.type !== "lookup_orders" && intent.type !== "plan_takeoff") {
         // AI returned no text — send a fallback so the customer isn't left hanging
-        const fallback = "Sorry, I wasn't able to process that. Please call us at 469-631-7730 and we'll help you out.";
+        const fallback = "Sorry, I wasn't able to process that. Please call us at ${COMPANY_PHONE} and we'll help you out.";
         await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: fallback });
         await sendSms(cleanPhone, fallback);
       }
@@ -1157,7 +1164,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
           });
 
           if (validEstItems.length === 0) {
-            const noValidMsg = "I wasn't able to match all items to our product catalog. Please call us at 469-631-7730 to get an estimate.";
+            const noValidMsg = "I wasn't able to match all items to our product catalog. Please call us at ${COMPANY_PHONE} to get an estimate.";
             await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: noValidMsg });
             await sendSms(cleanPhone, noValidMsg);
             return;
@@ -1184,7 +1191,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
               customerId: qboCustomerId,
               customerEmail: conv.customerEmail || undefined,
               lineItems: estimateLineItems,
-              customerMemo: `PRELIMINARY ESTIMATE — For bidding purposes only. Quoted via SMS. Call 469-631-7730 to place your order.`,
+              customerMemo: `PRELIMINARY ESTIMATE — For bidding purposes only. Quoted via SMS. Call ${COMPANY_PHONE} to place your order.`,
             });
 
             // Email the estimate link to the customer
@@ -1199,19 +1206,19 @@ export function registerRoutes(httpServer: Server, app: Express) {
             }
 
             const estimateMsg = conv.customerEmail
-              ? `Your estimate #${est.estimateNumber} has been created ($${total.toFixed(2)} incl. tax). We've emailed it to ${conv.customerEmail}. Ready to order? Call 469-631-7730.`
-              : `Your estimate #${est.estimateNumber} has been created ($${total.toFixed(2)} incl. tax). Ready to order? Call 469-631-7730.`;
+              ? `Your estimate #${est.estimateNumber} has been created ($${total.toFixed(2)} incl. tax). We've emailed it to ${conv.customerEmail}. Ready to order? Call ${COMPANY_PHONE}.`
+              : `Your estimate #${est.estimateNumber} has been created ($${total.toFixed(2)} incl. tax). Ready to order? Call ${COMPANY_PHONE}.`;
             await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: estimateMsg });
             await sendSms(cleanPhone, estimateMsg);
             console.log(`[Estimate] Estimate #${est.estimateNumber} created for ${cleanPhone} — $${total.toFixed(2)}`);
           } else {
-            const noQboMsg = "Your estimate has been noted. We'll email it to you shortly. Call 469-631-7730 with any questions.";
+            const noQboMsg = "Your estimate has been noted. We'll email it to you shortly. Call ${COMPANY_PHONE} with any questions.";
             await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: noQboMsg });
             await sendSms(cleanPhone, noQboMsg);
           }
         } catch (estErr: any) {
           console.error("[Estimate] SMS estimate creation error:", estErr);
-          const errMsg = "We hit a snag creating your estimate. Please call us at 469-631-7730 and we'll get one over to you right away.";
+          const errMsg = "We hit a snag creating your estimate. Please call us at ${COMPANY_PHONE} and we'll get one over to you right away.";
           await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: errMsg });
           await sendSms(cleanPhone, errMsg);
         }
@@ -1256,7 +1263,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
         }
         // Re-run AI with the order history injected into system prompt
         const historyIntent = await processMessage(conv, cleanBody, mediaUrls, orderHistoryText);
-        const historyReply = historyIntent.text || "I wasn't able to find your order history. Please call us at 469-631-7730 for help.";
+        const historyReply = historyIntent.text || "I wasn't able to find your order history. Please call us at ${COMPANY_PHONE} for help.";
         await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: historyReply });
         await sendSms(cleanPhone, historyReply);
       }
@@ -1269,7 +1276,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
     } catch (err) {
       console.error("[SMS] Error processing message:", err);
       try {
-        const techErr = "Sorry, we ran into a technical issue. Please try again in a moment or call us at 469-631-7730 and we'll help you out.";
+        const techErr = "Sorry, we ran into a technical issue. Please try again in a moment or call us at ${COMPANY_PHONE} and we'll help you out.";
         try {
           const errConv = await storage.getConversationByPhone(cleanPhone);
           if (errConv) await storage.addMessage({ conversationId: errConv.id, direction: "outbound", body: techErr });
@@ -1602,8 +1609,8 @@ export function registerRoutes(httpServer: Server, app: Express) {
       const fabLbs = fabItem ? Math.round(fabItem.qty) : 0;
       const leadTimeLine = fabLbs > 0
         ? (fabLbs >= 3000
-          ? `\nFabrication lead time: 7–13 business days (call 469-631-7730 for updates).`
-          : `\nFabrication lead time: 4–6 business days (call 469-631-7730 — may be ready sooner).`)
+          ? `\nFabrication lead time: 7–13 business days (call ${COMPANY_PHONE} for updates).`
+          : `\nFabrication lead time: 4–6 business days (call ${COMPANY_PHONE} — may be ready sooner).`)
         : null;
 
       const displayInvoiceNumber = invoiceNumber || invoiceId || "pending";
@@ -1634,7 +1641,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
     } catch (err) {
       console.error("[Order] Failed to create invoice:", err);
-      const orderErrMsg = `We had trouble creating your invoice. Please try again in a moment or call us at 469-631-7730 and we'll get it sorted out.`;
+      const orderErrMsg = `We had trouble creating your invoice. Please try again in a moment or call us at ${COMPANY_PHONE} and we'll get it sorted out.`;
       await storage.addMessage({ conversationId, direction: "outbound", body: orderErrMsg });
       try { await sendSms(phone, orderErrMsg); } catch {}
     } finally {
@@ -1668,8 +1675,8 @@ export function registerRoutes(httpServer: Server, app: Express) {
       if (!takeoffResult.lineItems || takeoffResult.lineItems.length === 0) {
         const hasPdf = imageUrls.some(u => u.startsWith("pdf::"));
         const errMsg = hasPdf
-          ? `I wasn't able to read enough detail from that PDF to build an estimate. For best results, share a Dropbox or Google Drive link instead of attaching the file directly — larger plan sets come through much clearer that way. Or call us at 469-631-7730 and we'll quote it manually.`
-          : `I couldn't extract materials from those images. Make sure all pages are clear and in focus. Try resending or call us at 469-631-7730 for a manual quote.`;
+          ? `I wasn't able to read enough detail from that PDF to build an estimate. For best results, share a Dropbox or Google Drive link instead of attaching the file directly — larger plan sets come through much clearer that way. Or call us at ${COMPANY_PHONE} and we'll quote it manually.`
+          : `I couldn't extract materials from those images. Make sure all pages are clear and in focus. Try resending or call us at ${COMPANY_PHONE} for a manual quote.`;
         console.error(`[Takeoff] Zero line items — imageUrls: ${JSON.stringify(imageUrls.map(u => u.substring(0,80)))}`);
         await storage.addMessage({ conversationId, direction: "outbound", body: errMsg });
         await sendSms(phone, errMsg);
@@ -1782,7 +1789,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
       // If nothing could be priced, tell customer and ask them to call
       if (pricedItems.length === 0) {
-        const noPrice = `We were able to identify the materials in your plan set but couldn't determine quantities automatically. Please call us at 469-631-7730 and we'll put together a manual quote for you.\n\nItems identified:\n${unpricedItems.map(i => `- ${i.name}`).join("\n")}`;
+        const noPrice = `We were able to identify the materials in your plan set but couldn't determine quantities automatically. Please call us at ${COMPANY_PHONE} and we'll put together a manual quote for you.\n\nItems identified:\n${unpricedItems.map(i => `- ${i.name}`).join("\n")}`;
         await storage.addMessage({ conversationId, direction: "outbound", body: noPrice });
         await sendSms(phone, noPrice);
         await storage.updateConversation(conversationId, { stage: "ordering", pendingImagesJson: null });
@@ -1793,7 +1800,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
       const fabCount = takeoffResult.fabItems.filter(f => !f.bendDescription.includes("stock length")).length;
       const fabNote = fabCount > 0 ? `\n${fabCount} custom fab item(s) @ $0.75/lb included.` : "";
       const tbdNote = unpricedItems.length > 0
-        ? `\n\nCould not determine qty from plans (call 469-631-7730 to add):\n${unpricedItems.map(i => `- ${i.name}`).join("\n")}`
+        ? `\n\nCould not determine qty from plans (call ${COMPANY_PHONE} to add):\n${unpricedItems.map(i => `- ${i.name}`).join("\n")}`
         : "";
 
       const estimateTax = subtotal * TAX_RATE;
@@ -1810,7 +1817,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
       } else if (estimateNumber) {
         replyText = `Takeoff complete for ${takeoffResult.projectName}!\n\n${top5}${moreCount}${fabNote}${tbdNote}\n\nSubtotal: $${subtotal.toFixed(2)}${taxLine}${cutSheetNote}\n\nEstimate #${estimateNumber} emailed to ${conv.customerEmail}. Reply APPROVE to confirm.`;
       } else {
-        replyText = `Takeoff complete for ${takeoffResult.projectName}!\n\n${top5}${moreCount}${fabNote}${tbdNote}\n\nSubtotal: $${subtotal.toFixed(2)}${taxLine}${cutSheetNote}\n\nReply APPROVE to confirm this estimate, or call 469-631-7730 with questions.`;
+        replyText = `Takeoff complete for ${takeoffResult.projectName}!\n\n${top5}${moreCount}${fabNote}${tbdNote}\n\nSubtotal: $${subtotal.toFixed(2)}${taxLine}${cutSheetNote}\n\nReply APPROVE to confirm this estimate, or call ${COMPANY_PHONE} with questions.`;
       }
 
       await storage.addMessage({ conversationId, direction: "outbound", body: replyText });
@@ -1825,7 +1832,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
     } catch (err) {
       console.error("[Takeoff] Error:", err);
-      const errMsg = `Something went wrong while reading your plan set. Please call us at 469-631-7730 and we\'ll get you a quote right away — usually within the hour.`;
+      const errMsg = `Something went wrong while reading your plan set. Please call us at ${COMPANY_PHONE} and we\'ll get you a quote right away — usually within the hour.`;
       await storage.addMessage({ conversationId, direction: "outbound", body: errMsg });
       await sendSms(phone, errMsg);
       // Also clear pendingImagesJson on error so a retry doesn't pick up stale data
@@ -1894,7 +1901,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
         } catch (convErr) {
           console.error("[Estimate] Failed to convert estimate to invoice:", convErr);
           // Notify customer so they aren't left waiting
-          const convErrMsg = `Your estimate has been approved. We had a technical issue creating the invoice automatically — our team will follow up shortly, or call us at 469-631-7730.`;
+          const convErrMsg = `Your estimate has been approved. We had a technical issue creating the invoice automatically — our team will follow up shortly, or call us at ${COMPANY_PHONE}.`;
           await storage.addMessage({ conversationId, direction: "outbound", body: convErrMsg });
           await sendSms(phone, convErrMsg);
         }
@@ -1929,7 +1936,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
       // 3. Send customer confirmation + payment link
       let confirmMsg: string;
       if (paymentLink) {
-        confirmMsg = `Estimate approved! Invoice #${invoiceNumber} has been created.\n\nPay here:\n${paymentLink}\n\nWe'll also email the invoice to ${customerEmail}. Thank you for choosing Rebar Concrete Products!`;
+        confirmMsg = `Estimate approved! Invoice #${invoiceNumber} has been created.\n\nPay here:\n${paymentLink}\n\nWe'll also email the invoice to ${customerEmail}. Thank you for choosing ${COMPANY_NAME}!`;
       } else {
         confirmMsg = `Estimate approved! Invoice #${invoiceNumber} has been created and emailed to ${customerEmail}. Our team will begin processing your order. Thank you!`;
       }
@@ -1966,7 +1973,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
     } catch (err) {
       console.error("[Estimate] Approval handler failed:", err);
       try {
-        const errMsg = "There was an issue processing your approval. Please call us at 469-631-7730 and we'll take care of you.";
+        const errMsg = "There was an issue processing your approval. Please call us at ${COMPANY_PHONE} and we'll take care of you.";
         await storage.addMessage({ conversationId, direction: "outbound", body: errMsg });
         await sendSms(phone, errMsg);
       } catch (_) {}
@@ -2125,7 +2132,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
       const transporter = nodemailer.default.createTransport({ service: "gmail", auth: { user: gmailUser, pass: gmailPass } });
       await transporter.verify();
       const info = await transporter.sendMail({
-        from: `"Rebar Concrete Products" <${gmailUser}>`,
+        from: `"${COMPANY_NAME}" <${gmailUser}>`,
         to,
         subject: "RCP SMS Bot — Email Test",
         text: "This is a test email from the RCP SMS Bot to confirm email delivery is working correctly.",
@@ -2217,7 +2224,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
 <Response>
   <Say voice="Polly.Joanna">
     Rebar Concrete Products is located at 2112 North Custer Road, McKinney, Texas 75071.
-    Our phone number is 469-631-7730.
+    Our phone number is ${COMPANY_PHONE}.
     You can also text this number 24 hours a day, 7 days a week to place orders or get quotes.
     Thank you for calling. Goodbye.
   </Say>
@@ -2561,7 +2568,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
             shipToName: customerName,
             shipToPhone: customerPhone || undefined,
             deliveryAddress: deliveryAddress || undefined,
-            customerMemo: `Web estimate for ${customerName}${customerPhone ? ` (${customerPhone})` : ""}. No account on file — call 469-631-7730 to set up an account.`,
+            customerMemo: `Web estimate for ${customerName}${customerPhone ? ` (${customerPhone})` : ""}. No account on file — call ${COMPANY_PHONE} to set up an account.`,
           });
 
           const estimateLink = `https://rcp-sms-bot-production.up.railway.app/api/estimate-pdf/${est.estimateId}`;
@@ -2570,13 +2577,13 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
             error: "no_account",
             estimateNumber: est.estimateNumber,
             estimateLink,
-            message: `No account found for that phone number. We created estimate #${est.estimateNumber} and emailed it to you. Call 469-631-7730 or visit us at 2112 N Custer Rd, McKinney, TX 75071 to set up an account.`,
+            message: `No account found for that phone number. We created estimate #${est.estimateNumber} and emailed it to you. Call ${COMPANY_PHONE} or visit us at 2112 N Custer Rd, McKinney, TX 75071 to set up an account.`,
           });
         } catch (estErr: any) {
           console.error("[WEB-ORDER] EST estimate fallback failed:", (estErr as any).message);
           return res.status(403).json({
             error: "customer_not_found",
-            message: `We couldn't find an account for that phone number. Call 469-631-7730 or visit us at 2112 N Custer Rd, McKinney, TX 75071 to get set up.`,
+            message: `We couldn't find an account for that phone number. Call ${COMPANY_PHONE} or visit us at 2112 N Custer Rd, McKinney, TX 75071 to get set up.`,
           });
         }
       }
@@ -2973,9 +2980,9 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       if (cleaned.length < 10) return res.status(400).json({ error: "Invalid phone number" });
       await sendSms(
         e164,
-        "Rebar Concrete Products: Your order request has been received. " +
+        "${COMPANY_NAME}: Your order request has been received. " +
         "We will create your invoice and send you a payment link shortly. " +
-        "Call 469-631-7730 with any questions."
+        "Call ${COMPANY_PHONE} with any questions."
       );
       console.log(`[send-payment-link-sms] Sent confirmation to ${e164}`);
       res.json({ success: true });
@@ -3375,7 +3382,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
             email: orderPayload.customerEmail || undefined,
           });
           if (!existingCustomerId) {
-            const notFoundMsg = `I wasn't able to find an existing account for ${orderPayload.customerName || "you"} in our system. Online invoicing is available to customers with an account on file.\n\nTo get set up, stop by our store at 2112 N Custer Rd, McKinney, TX or call us at 469-631-7730 — it only takes a few minutes! In the meantime, I can send you a formal estimate instead.`;
+            const notFoundMsg = `I wasn't able to find an existing account for ${orderPayload.customerName || "you"} in our system. Online invoicing is available to customers with an account on file.\n\nTo get set up, stop by our store at 2112 N Custer Rd, McKinney, TX or call us at ${COMPANY_PHONE} — it only takes a few minutes! In the meantime, I can send you a formal estimate instead.`;
             if (data.reply !== undefined)   data.reply   = notFoundMsg;
             if (data.message !== undefined) data.message = notFoundMsg;
             if (data.content !== undefined) data.content = notFoundMsg;
@@ -3473,7 +3480,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
 
           if (orderData.error === "customer_not_found") {
             // Inject error message directly into the chat reply so the widget shows it
-            const errorMsg = "I wasn't able to locate an account matching your name and phone number in our system. To place orders online, you'll need an account on file — please stop by our store at 2112 N Custer Rd, McKinney, TX or call us at 469-631-7730 to get set up. It only takes a few minutes!";
+            const errorMsg = "I wasn't able to locate an account matching your name and phone number in our system. To place orders online, you'll need an account on file — please stop by our store at 2112 N Custer Rd, McKinney, TX or call us at ${COMPANY_PHONE} to get set up. It only takes a few minutes!";
             if (data.reply !== undefined)   data.reply   = errorMsg;
             if (data.message !== undefined) data.message = errorMsg;
             if (data.content !== undefined) data.content = errorMsg;
@@ -3488,7 +3495,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
             if (cleanedPhone.length >= 10 && isTwilioConfigured()) {
               sendSms(
                 e164,
-                `Rebar Concrete Products: Your invoice #${orderData.invoiceNumber} is ready. ` +
+                `${COMPANY_NAME}: Your invoice #${orderData.invoiceNumber} is ready. ` +
                 `Total: $${Number(orderData.total).toFixed(2)}. ` +
                 `Pay here: ${orderData.paymentLink}`
               ).catch(e => console.error("[chat-proxy] SMS error:", e));
@@ -3499,9 +3506,9 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
             if (cleanedPhone.length >= 10 && isTwilioConfigured()) {
               sendSms(
                 e164,
-                "Rebar Concrete Products: Your order was received. " +
+                "${COMPANY_NAME}: Your order was received. " +
                 "We're preparing your invoice and will send a payment link shortly. " +
-                "Questions? Call 469-631-7730."
+                "Questions? Call ${COMPANY_PHONE}."
               ).catch(e => console.error("[chat-proxy] SMS error:", e));
             }
           }
@@ -3517,9 +3524,9 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
           const e164 = cleanedPhone.startsWith("1") ? "+" + cleanedPhone : "+1" + cleanedPhone;
           sendSms(
             e164,
-            "Rebar Concrete Products: Your order request was received. " +
+            "${COMPANY_NAME}: Your order request was received. " +
             "We will prepare your invoice and text you a payment link shortly. " +
-            "Call 469-631-7730 with any questions."
+            "Call ${COMPANY_PHONE} with any questions."
           ).catch(err => console.warn("[chat-proxy] SMS fallback failed:", err));
         }
         data.confirmOrderTriggered = true;
@@ -3563,8 +3570,8 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
               sendSms(
                 estE164,
                 estimateEmail
-                  ? `Rebar Concrete Products: Your estimate #${estData.estimateNumber} is ready ($${Number(estData.total).toFixed(2)}). Check your email at ${estimateEmail} for the full estimate. Call 469-631-7730 to place your order.`
-                  : `Rebar Concrete Products: Your estimate #${estData.estimateNumber} is ready ($${Number(estData.total).toFixed(2)}). Call 469-631-7730 to review it or place your order.`
+                  ? `${COMPANY_NAME}: Your estimate #${estData.estimateNumber} is ready ($${Number(estData.total).toFixed(2)}). Check your email at ${estimateEmail} for the full estimate. Call ${COMPANY_PHONE} to place your order.`
+                  : `${COMPANY_NAME}: Your estimate #${estData.estimateNumber} is ready ($${Number(estData.total).toFixed(2)}). Call ${COMPANY_PHONE} to review it or place your order.`
               ).catch(e => console.error("[chat-proxy] Estimate SMS error:", e));
             }
           } else {
@@ -4119,7 +4126,7 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       const transporter = nodemailer.createTransport({ service: 'gmail', auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD || process.env.EMAIL_PASS } });
       const recipients = ['brian@rebarconcreteproducts.com', 'office@rebarconcreteproducts.com'];
       await transporter.sendMail({
-        from: `"Rebar Concrete Products" <${process.env.GMAIL_USER}>`,
+        from: `"${COMPANY_NAME}" <${process.env.GMAIL_USER}>`,
         to: recipients.join(', '),
         subject: `RCP Monthly PO Audit — ${reportDate}`,
         html,

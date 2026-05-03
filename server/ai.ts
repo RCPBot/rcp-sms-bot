@@ -102,6 +102,23 @@ function buildSystemPrompt(products: Product[], conv: Conversation): string {
     ? `VERIFIED CUSTOMER ON FILE:\n- Name: ${conv.customerName}\n- Email: ${conv.customerEmail || "unknown"}\n- Company: ${conv.customerCompany || "N/A"}\n- Stage: ${conv.stage}\n- Delivery address on file: ${conv.deliveryAddress || "none"}`
     : `STAGE: ${conv.stage} — customer not yet verified`;
 
+  // ── MULTI-TENANT: if SYSTEM_PROMPT env var is set, use it instead of the
+  // hardcoded RCP block. All dynamic injections (products, customer ctx,
+  // price lookup, learned rules) still get appended by processMessage().
+  if (process.env.SYSTEM_PROMPT) {
+    return `${process.env.SYSTEM_PROMPT}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+LIVE PRODUCT CATALOG (from QuickBooks — authoritative prices)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${productList}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CUSTOMER CONTEXT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${customerCtx}`;
+  }
+
   return `You are the AI ordering agent for Rebar Concrete Products.
 
 COMPANY DATA (authoritative — use verbatim when asked):
