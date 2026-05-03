@@ -4,6 +4,11 @@ import express from "express";
 import { storage } from "./storage";
 import { sendSms, isTwilioConfigured, sendPaymentLinkEmail, sendEstimateEmail, sendStaffOrderNotification, sendVerificationCode } from "./sms";
 import { processMessage, extractOrderFromConversation, extractCustomerInfo, isAiConfigured, checkAndFlagConversation, checkAbandonedMidQuote, inferCustomerType } from "./ai";
+import { processMessageV2 } from "./engine";
+
+// Use the v2 hybrid engine when ENGINE_VERSION=v2 env var is set.
+// All other logic (SMS, QBO, delivery, etc.) remains unchanged.
+const _processMessage = process.env.ENGINE_VERSION === "v2" ? processMessageV2 : processMessage;
 import { syncProducts, findOrCreateCustomer, findExistingCustomer, createInvoice, createEstimate, getEstimateStatus, lookupCustomerByPhone, calcDeliveryFee, isQboConfigured, getCustomerInvoices, convertEstimateToInvoice, updateRailwayEnvVar, setLiveRefreshToken, getOrCreateBotCustomer, getOrCreateEstCustomer, getQboItems, getInvoiceById, getPurchaseOrders, qboGet, fetchEstimatePdf } from "./qbo";
 import { performTakeoff } from "./takeoff";
 import { resolveLinksFromText, extractUrls } from "./link-resolver";
@@ -998,7 +1003,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
       }
 
       // Handle the message with AI (pass image URLs if any)
-      const intent = await processMessage(conv, cleanBody, mediaUrls, undefined, justAutoVerified, customerMemoryRecord);
+      const intent = await _processMessage(conv, cleanBody, mediaUrls, undefined, justAutoVerified, customerMemoryRecord);
 
       // ── Handle delivery fee calculation ───────────────────────────────────────
       if (intent.type === "calc_delivery") {
@@ -1262,7 +1267,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
           orderHistoryText = "Customer QBO ID not available — cannot retrieve order history.";
         }
         // Re-run AI with the order history injected into system prompt
-        const historyIntent = await processMessage(conv, cleanBody, mediaUrls, orderHistoryText);
+        const historyIntent = await _processMessage(conv, cleanBody, mediaUrls, orderHistoryText);
         const historyReply = historyIntent.text || "I wasn't able to find your order history. Please call us at ${COMPANY_PHONE} for help.";
         await storage.addMessage({ conversationId: conv.id, direction: "outbound", body: historyReply });
         await sendSms(cleanPhone, historyReply);
