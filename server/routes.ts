@@ -4172,7 +4172,7 @@ Est. 2022. Be concise, use bullet points, real math.`;
   function addEmpCors(res: any) {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-rcp-internal");
   }
 
   async function callEmpAI(messages: { role: string; content: string }[], systemExtra?: string): Promise<string> {

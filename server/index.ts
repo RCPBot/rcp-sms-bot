@@ -21,7 +21,7 @@ app.use((req, res, next) => {
   if (req.path.startsWith('/api/employee/')) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-rcp-internal');
     if (req.method === 'OPTIONS') return res.sendStatus(204);
     return next();
   }
@@ -29,7 +29,7 @@ app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', origin);
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-rcp-internal');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
