@@ -2609,6 +2609,13 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
         };
       }).filter((item: LineItem) => item.qboItemId !== "");
 
+      // Strip any AI-injected delivery fee — delivery is calculated server-side
+      // via calcDeliveryFee and passed as the deliveryFee param to createInvoice.
+      // Leaving it in would double-charge the customer.
+      const preDeliveryCount = lineItems.length;
+      lineItems.splice(0, lineItems.length, ...lineItems.filter(i => String(i.qboItemId) !== "1010000081"));
+      if (lineItems.length !== preDeliveryCount) console.log(`[WEB-ORDER] Stripped ${preDeliveryCount - lineItems.length} AI-injected delivery fee item(s) — handled server-side`);
+
       // Enrich rebar line items with bundle breakdown for warehouse
       lineItems.forEach((item, i) => { lineItems[i] = addBundleDesc(item); });
 
