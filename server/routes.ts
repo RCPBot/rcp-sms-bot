@@ -2479,10 +2479,52 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       });
 
       if (!customerId) {
-        return res.status(403).json({
-          error: "customer_not_found",
-          message: `We weren’t able to verify an account for “${customerName}” with that phone number. Please call us at 469-631-7730 or stop by 2112 N Custer Rd, McKinney, TX 75071 to get set up.`,
-        });
+        // No account found — create a QBO estimate under the EST customer so the
+        // customer still gets a quote they can bring in to set up an account.
+        try {
+          const estCustomerId = await getOrCreateEstCustomer();
+          const products2 = await getQboItems();
+          const estLineItems = items.map((item: any) => {
+            const product = item.qboItemId
+              ? products2.find((p: any) => String(p.id) === String(item.qboItemId))
+              : products2.find((p: any) => p.name?.toLowerCase() === item.name?.toLowerCase());
+            const exactPrice = product ? product.unitPrice : item.unitPrice;
+            const resolvedQboId = product ? String(product.id) : (item.qboItemId ? String(item.qboItemId) : null);
+            const qty = Number(item.qty);
+            return {
+              qboItemId: resolvedQboId || "",
+              name: item.name,
+              description: item.description || "",
+              qty,
+              unitPrice: exactPrice,
+              amount: Math.round(qty * exactPrice * 100) / 100,
+            };
+          }).filter((i: any) => i.qboItemId !== "");
+
+          const est = await createEstimate({
+            customerId: estCustomerId,
+            customerEmail: customerEmail || undefined,
+            lineItems: estLineItems,
+            shipToName: customerName,
+            shipToPhone: customerPhone || undefined,
+            customerMemo: `Web estimate for ${customerName}${customerPhone ? ` (${customerPhone})` : ""}. No account on file — call 469-631-7730 to set up an account.`,
+          });
+
+          const estimateLink = `https://rcp-sms-bot-production.up.railway.app/api/estimate-pdf/${est.estimateId}`;
+          console.log(`[WEB-ORDER] No account for "${customerName}" — created EST estimate #${est.estimateNumber}`);
+          return res.status(200).json({
+            error: "no_account",
+            estimateNumber: est.estimateNumber,
+            estimateLink,
+            message: `No account found for that phone number. We created estimate #${est.estimateNumber} and emailed it to you. Call 469-631-7730 or visit us at 2112 N Custer Rd, McKinney, TX 75071 to set up an account.`,
+          });
+        } catch (estErr: any) {
+          console.error("[WEB-ORDER] EST estimate fallback failed:", (estErr as any).message);
+          return res.status(403).json({
+            error: "customer_not_found",
+            message: `We couldn't find an account for that phone number. Call 469-631-7730 or visit us at 2112 N Custer Rd, McKinney, TX 75071 to get set up.`,
+          });
+        }
       }
 
       // Build line items with exact DB prices
