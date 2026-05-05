@@ -3327,9 +3327,10 @@ QBO_REFRESH_TOKEN=${tokens.refresh_token}</pre>
       // This bypasses the legacy EstimatingBot + full tag-parsing code below.
       if (process.env.COREBUILD_MODE === "true") {
         const cbUrl = process.env.COREBUILD_CHAT_PROXY_URL ?? "https://corebuild-platform-production.up.railway.app/api/chat-proxy";
+        const companySlug = (req.headers["x-company-slug"] as string) || process.env.COMPANY_SLUG || "rcp";
         const cbResp = await fetch(cbUrl, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "x-company-slug": companySlug },
           body: JSON.stringify(req.body),
         });
         const cbData = await cbResp.json();
